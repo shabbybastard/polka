@@ -22,20 +22,21 @@ import (
 )
 
 type Server struct {
-	cfg     *config.Config
-	log     *slog.Logger
-	st      *store.Store
-	lib     *library.Library // nil if library-dir is not set
-	users   *auth.Service
-	desktop *auth.User     // non-nil in desktop mode: owner auto-login
-	sync    *syncer.Syncer // non-nil in server synchronization mode
-	enrich  *enrich.Provider
-	cols    *collections.Service // book collections (collections.db)
-	srcs    sourcesState         // external collection sources sync
-	imp     importState          // state of the background inpx web import
-	reader  readerCache          // parsed books for online reading
-	basic   basicCache           // verified Basic credentials (OPDS)
-	genres  genreCache           // genre counters for search
+	cfg       *config.Config
+	log       *slog.Logger
+	st        *store.Store
+	lib       *library.Library // nil if library-dir is not set
+	users     *auth.Service
+	desktop   *auth.User     // non-nil in desktop mode: owner auto-login
+	sync      *syncer.Syncer // non-nil in server synchronization mode
+	enrich    *enrich.Provider
+	cols      *collections.Service // book collections (collections.db)
+	srcs      sourcesState         // external collection sources sync
+	imp       importState          // state of the background inpx web import
+	genreSync genreSyncState       // background external genre loading
+	reader    readerCache          // parsed books for online reading
+	basic     basicCache           // verified Basic credentials (OPDS)
+	genres    genreCache           // genre counters for search
 
 	loginLimiter *rateLimiter // throttle password guessing
 	guestLimiter *rateLimiter // throttle demo guest creation
@@ -53,19 +54,22 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 	}
 	if cfg.DataDir == "" {
 		// tests without a data directory: collections are unavailable
-	} else if cs, err := collections.Open(filepath.Join(cfg.DataDir, "collections.db")); err != nil {
-		log.Error("collections database", "error", err)
 	} else {
-		s.cols = cs
-		if seeded, err := cs.SeedBundled(context.Background(), bundled.FS()); err != nil {
-			log.Warn("bundled collections", "error", err)
-		} else if len(seeded) > 0 {
-			log.Info("bundled collections loaded", "count", len(seeded))
-		}
-		// Matching may be stale after a re-import; recompute in the background.
-		go s.rematchCollections(context.Background())
-		if cfg.DataDir != "" && cfg.Auth != "demo" {
-			go s.sourcesLoop(context.Background())
+		go s.backupLoop(context.Background())
+		if cs, err := collections.Open(filepath.Join(cfg.DataDir, "collections.db")); err != nil {
+			log.Error("collections database", "error", err)
+		} else {
+			s.cols = cs
+			if seeded, err := cs.SeedBundled(context.Background(), bundled.FS()); err != nil {
+				log.Warn("bundled collections", "error", err)
+			} else if len(seeded) > 0 {
+				log.Info("bundled collections loaded", "count", len(seeded))
+			}
+			// Matching may be stale after a re-import; recompute in the background.
+			go s.rematchCollections(context.Background())
+			if cfg.Auth != "demo" {
+				go s.sourcesLoop(context.Background())
+			}
 		}
 	}
 	if cfg.Auth == "desktop" {
@@ -112,10 +116,14 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			"POST /admin/books/upload",
 			"POST /admin/books/{id}/delete",
 			"POST /admin/books/{id}/restore",
+			"POST /admin/books/{id}/metadata",
+			"POST /admin/books/{id}/epub",
 			"POST /admin/import/inpx",
 			"GET /admin/import/status",
 			"GET /admin/settings",
 			"POST /admin/settings",
+			"POST /admin/genres/sync",
+			"GET /admin/genres/status",
 		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 				if !s.sync.Online() {
@@ -131,6 +139,8 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			mux.HandleFunc("POST /admin/books/upload", s.adminOnly(s.handleBookUpload))
 			mux.HandleFunc("POST /admin/books/{id}/delete", s.adminOnly(s.handleBookSetDeleted(true)))
 			mux.HandleFunc("POST /admin/books/{id}/restore", s.adminOnly(s.handleBookSetDeleted(false)))
+			mux.HandleFunc("POST /admin/books/{id}/metadata", s.adminOnly(s.handleBookMetadata))
+			mux.HandleFunc("POST /admin/books/{id}/epub", s.adminOnly(s.handleBookEPUBEdit))
 			mux.HandleFunc("POST /admin/import/inpx", s.adminOnly(s.handleImportInpx))
 			mux.HandleFunc("GET /admin/import/status", s.adminOnly(s.handleImportStatus))
 		}
@@ -170,6 +180,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 		mux.HandleFunc("GET /api/v1/read/{id}/img/{imgId}", s.protected(s.handleReadImage))
 		mux.HandleFunc("GET /api/v1/read/{id}/progress", s.protected(s.handleReadProgress))
 		mux.HandleFunc("POST /api/v1/read/{id}/progress", s.protected(s.handleReadProgress))
+		mux.HandleFunc("DELETE /api/v1/read/{id}/progress", s.protected(s.handleReadProgress))
 
 		// Frontend v2 contract: main/getBooks/*
 		mux.HandleFunc("GET /main/getBooks/getConfig", s.protected(s.handleGetConfig))
@@ -199,6 +210,8 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			mux.HandleFunc("GET /admin/settings", s.adminOnly(s.handleSettingsGet))
 			mux.HandleFunc("POST /admin/settings", s.adminOnly(s.handleSettingsSave))
 			mux.HandleFunc("POST /admin/smtp/test", s.adminOnly(s.handleSmtpTest))
+			mux.HandleFunc("POST /admin/genres/sync", s.adminOnly(s.handleGenreSyncStart))
+			mux.HandleFunc("GET /admin/genres/status", s.adminOnly(s.handleGenreSyncStatus))
 		}
 
 		// User data state for desktop clients
@@ -263,6 +276,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"collectionName": s.st.GetMeta(r.Context(), "collection_name", "Полка"),
 		"numberOfBooks":  count,
+		"homeHero":       s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
 	})
 }
 

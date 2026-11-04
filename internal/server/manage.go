@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -273,6 +274,51 @@ func createUnique(dir, base, ext string) (*os.File, string, error) {
 }
 
 // --- Deletion/restoration ---
+
+// POST /admin/books/{id}/metadata — edit a book's title and authors.
+func (s *Server) handleBookMetadata(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req struct {
+		Title   string `json:"title"`
+		Authors []struct {
+			Last   string `json:"last"`
+			First  string `json:"first"`
+			Middle string `json:"middle"`
+		} `json:"authors"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if len([]rune(title)) > 512 || len(req.Authors) > 20 {
+		http.Error(w, "too long", http.StatusBadRequest)
+		return
+	}
+	authors := make([]store.AuthorName, 0, len(req.Authors))
+	for _, a := range req.Authors {
+		if len([]rune(a.Last)) > 128 || len([]rune(a.First)) > 128 || len([]rune(a.Middle)) > 128 {
+			http.Error(w, "author name is too long", http.StatusBadRequest)
+			return
+		}
+		authors = append(authors, store.AuthorName{
+			Last: strings.TrimSpace(a.Last), First: strings.TrimSpace(a.First), Middle: strings.TrimSpace(a.Middle),
+		})
+	}
+	if err := s.st.UpdateBookMetadata(r.Context(), id, title, authors); err != nil {
+		s.apiError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
 
 func (s *Server) handleBookSetDeleted(deleted bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

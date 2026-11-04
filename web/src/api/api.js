@@ -1,11 +1,9 @@
-// API client for the new UI. The base URL comes from a build-time
-// environment variable (VITE_API_URL), which lets you run `npm run dev`
-// alongside the C++ server without touching the sources.
+// API client for the SPA. In production the frontend is embedded in the Go
+// binary and served from the same origin, so baseUrl stays empty.
 //
 //   .env.local   →   VITE_API_URL=http://192.168.3.31:12791/
 //
-// In production builds (when the frontend is embedded into qrc and served
-// by the server itself) baseUrl stays empty and all requests go to the same origin.
+// Set VITE_API_URL only when running `npm run dev` against a separate server.
 
 const baseUrl = import.meta.env.VITE_API_URL ?? "";
 
@@ -52,8 +50,9 @@ export const api = {
     return res.text();
   },
 
-  coverUrl(bookId) {
-    return buildUrl(`Images/covers/${bookId}`);
+  coverUrl(bookId, version) {
+    const url = buildUrl(`Images/covers/${bookId}`);
+    return version ? `${url}?v=${encodeURIComponent(version)}` : url;
   },
 
   fb2Url(bookId) {

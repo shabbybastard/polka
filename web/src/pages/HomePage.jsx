@@ -44,36 +44,38 @@ const HomePage = ({ config }) => {
 
   return (
     <div className="container homepage">
-      <section className="hero">
-        <div className="hero__content">
-          <p className="hero__eyebrow">{t("home.eyebrow")}</p>
-          <h1 className="hero__title">
-            {config?.numberOfBooks
-              ? t("home.titleCount", { n: config.numberOfBooks.toLocaleString() })
-              : t("home.title")}
-          </h1>
-          <p className="hero__lead">
-{t("home.lead")}
-          </p>
-          <div className="hero__actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => navigate("/search?scope=bookTitles")}
-            >
-              {t("home.openCatalog")}
-            </button>
-            {config?.groups?.length ? (
-              <span className="hero__hint">
-                {t("home.collections")} <b>{config.groups.length}</b>
-              </span>
-            ) : null}
+      {config?.homeHero !== false && (
+        <section className="hero">
+          <div className="hero__content">
+            <p className="hero__eyebrow">{t("home.eyebrow")}</p>
+            <h1 className="hero__title">
+              {config?.numberOfBooks
+                ? t("home.titleCount", { n: config.numberOfBooks.toLocaleString() })
+                : t("home.title")}
+            </h1>
+            <p className="hero__lead">
+              {t("home.lead")}
+            </p>
+            <div className="hero__actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate("/search?scope=bookTitles")}
+              >
+                {t("home.openCatalog")}
+              </button>
+              {config?.groups?.length ? (
+                <span className="hero__hint">
+                  {t("home.collections")} <b>{config.groups.length}</b>
+                </span>
+              ) : null}
+            </div>
           </div>
-        </div>
-        <div className="hero__deco" aria-hidden="true">
-          <img className="hero__deco-img" src="/hero-books.png" alt="" />
-        </div>
-      </section>
+          <div className="hero__deco" aria-hidden="true">
+            <img className="hero__deco-img" src="/hero-books.png" alt="" />
+          </div>
+        </section>
+      )}
 
       {loading && (
         <div className="homepage__loading">

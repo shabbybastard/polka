@@ -12,7 +12,8 @@ import {
 } from "../api/reader";
 import "./ReaderPage.css";
 
-// PDF and EPUB engines are heavy — load them only when such a file is opened.
+// The PDF engine is heavy — load it only when a PDF is opened. FB2, TXT
+// and EPUB are rendered from chapters parsed by the server.
 const PdfReader = lazy(() => import("./PdfReader"));
 
 const FONT_SIZES = [17, 19, 21, 24];

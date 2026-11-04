@@ -32,11 +32,12 @@ const (
 var Sources = []string{SourceLiveLib, SourceGoogleBooks, SourceOpenLibrary}
 
 type Result struct {
-	Source       string  `json:"source"`
-	Rating       float64 `json:"rating"`
-	RatingsCount int     `json:"ratingsCount,omitempty"`
-	InfoURL      string  `json:"infoUrl,omitempty"`
-	CoverURL     string  `json:"coverUrl,omitempty"`
+	Source       string   `json:"source"`
+	Rating       float64  `json:"rating"`
+	RatingsCount int      `json:"ratingsCount,omitempty"`
+	InfoURL      string   `json:"infoUrl,omitempty"`
+	CoverURL     string   `json:"coverUrl,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 type Enrichment struct {
@@ -45,11 +46,15 @@ type Enrichment struct {
 	Negative         bool     `json:"negative"`
 	ExtraSourceCount int      `json:"extraSourceCount"`
 	CoverURL         string   `json:"coverUrl,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
 }
 
 type cacheEntry struct {
 	Result    *Enrichment `json:"result"`
 	FetchedAt time.Time   `json:"fetchedAt"`
+	// TagKey lists the tag sources used for this entry. Changing the
+	// administrator's per-source toggles invalidates the cached tags.
+	TagKey string `json:"tagKey,omitempty"`
 }
 
 type Provider struct {
@@ -105,16 +110,36 @@ func (p *Provider) persistCache() {
 	os.Rename(tmp, p.cachePath)
 }
 
-// Get returns book enrichment, querying the enabled sources.
-func (p *Provider) Get(ctx context.Context, key, title, author string, enabled map[string]bool) *Enrichment {
+func tagSourcesKey(tagSources map[string]bool) string {
+	var keys []string
+	for _, source := range Sources {
+		if tagSources[source] {
+			keys = append(keys, source)
+		}
+	}
+	return strings.Join(keys, ",")
+}
+
+// Get returns book enrichment, querying the enabled sources. tagSources
+// selects which sources may fetch tags; the LiveLib page request and the
+// Open Library subject parsing are skipped when their toggle is off.
+func (p *Provider) Get(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
+	tagKey := tagSourcesKey(tagSources)
 	p.mu.Lock()
 	if e, ok := p.cache[key]; ok {
 		ttl := successTTL
 		if e.Result.Negative {
 			ttl = negativeTTL
 		}
-		if time.Since(e.FetchedAt) < ttl {
+		if time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
 			p.mu.Unlock()
+			if tagKey == "" && len(e.Result.Tags) > 0 {
+				// Do not leak tags through a cache entry when the
+				// administrator has every tag source switched off.
+				clone := *e.Result
+				clone.Tags = nil
+				return &clone
+			}
 			return e.Result
 		}
 	}
@@ -123,7 +148,9 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 	res := &Enrichment{}
 	transientOnly := true
 	for _, source := range Sources {
-		if !enabled[source] {
+		// A source may be enabled only for genre tags while its rating
+		// switch is off.
+		if !enabled[source] && !tagSources[source] {
 			continue
 		}
 		p.mu.Lock()
@@ -133,7 +160,7 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 			continue
 		}
 
-		r, err := p.fetch(ctx, source, title, author)
+		r, err := p.fetch(ctx, source, title, author, tagSources[source])
 		if err != nil {
 			// Network/transient error: short back-off, not cached.
 			p.mu.Lock()
@@ -155,6 +182,9 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 
 	if len(res.Sources) > 0 {
 		res.ExtraSourceCount = len(res.Sources) - 1
+		if tagKey != "" {
+			res.Tags = collectTags(res.Sources)
+		}
 	} else {
 		res.Negative = true
 		if transientOnly {
@@ -164,20 +194,46 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 	}
 
 	p.mu.Lock()
-	p.cache[key] = cacheEntry{Result: res, FetchedAt: time.Now()}
+	p.cache[key] = cacheEntry{Result: res, FetchedAt: time.Now(), TagKey: tagKey}
 	p.persistCache()
 	p.mu.Unlock()
 	return res
 }
 
-func (p *Provider) fetch(ctx context.Context, source, title, author string) (*Result, error) {
+// collectTags merges tag lists from all sources, dropping duplicates and
+// overlong subject phrases from library catalogs.
+func collectTags(sources []Result) []string {
+	const maxTags = 12
+	seen := map[string]bool{}
+	out := make([]string, 0, maxTags)
+	for _, src := range sources {
+		for _, tag := range src.Tags {
+			tag = strings.TrimSpace(strings.Trim(tag, `.,;:`))
+			if tag == "" || len([]rune(tag)) > 80 {
+				continue
+			}
+			key := strings.ToLower(tag)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, tag)
+			if len(out) >= maxTags {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func (p *Provider) fetch(ctx context.Context, source, title, author string, withTags bool) (*Result, error) {
 	switch source {
 	case SourceLiveLib:
-		return p.fetchLiveLib(ctx, title, author)
+		return p.fetchLiveLib(ctx, title, author, withTags)
 	case SourceGoogleBooks:
 		return p.fetchGoogleBooks(ctx, title, author)
 	case SourceOpenLibrary:
-		return p.fetchOpenLibrary(ctx, title, author)
+		return p.fetchOpenLibrary(ctx, title, author, withTags)
 	}
 	return nil, nil
 }
@@ -204,9 +260,13 @@ func (p *Provider) get(ctx context.Context, rawURL string, browser bool) ([]byte
 
 // --- LiveLib: search page parsing ---
 
-var livelibRe = regexp.MustCompile(`(?s)href="(/book/\d+[^"]*)".*?itemprop="ratingValue">([\d.,]+)`)
+var (
+	livelibRe       = regexp.MustCompile(`(?s)href="(/book/\d+[^"]*)".*?itemprop="ratingValue">([\d.,]+)`)
+	livelibGenreRe  = regexp.MustCompile(`"genre"\s*:\s*\[((?:"[^"]*"\s*,?\s*)*)\]`)
+	livelibGenreVal = regexp.MustCompile(`"([^"]+)"`)
+)
 
-func (p *Provider) fetchLiveLib(ctx context.Context, title, author string) (*Result, error) {
+func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, includeTags bool) (*Result, error) {
 	q := strings.TrimSpace(title)
 	body, err := p.get(ctx, p.LiveLibBase+"/find/books/"+url.PathEscape(q), true)
 	if err != nil {
@@ -220,11 +280,33 @@ func (p *Provider) fetchLiveLib(ctx context.Context, title, author string) (*Res
 	if err != nil || rating <= 0 {
 		return nil, nil
 	}
-	return &Result{
+	res := &Result{
 		Source:  SourceLiveLib,
 		Rating:  rating,
 		InfoURL: p.LiveLibBase + string(m[1]),
-	}, nil
+	}
+	if includeTags {
+		// The search result only has the rating; genres live on the book
+		// page in its JSON-LD. A failure here must not discard the rating.
+		if page, err := p.get(ctx, res.InfoURL, true); err == nil {
+			res.Tags = livelibTags(page)
+		}
+	}
+	return res, nil
+}
+
+func livelibTags(page []byte) []string {
+	m := livelibGenreRe.FindSubmatch(page)
+	if m == nil {
+		return nil
+	}
+	var out []string
+	for _, q := range livelibGenreVal.FindAllSubmatch(m[1], -1) {
+		if tag := strings.TrimSpace(string(q[1])); tag != "" {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 // --- Google Books ---
@@ -272,11 +354,11 @@ func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string) (
 
 // --- Open Library ---
 
-func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string) (*Result, error) {
+func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string, withTags bool) (*Result, error) {
 	params := url.Values{
 		"title":  {title},
 		"limit":  {"5"},
-		"fields": {"key,title,ratings_average,ratings_count,cover_i"},
+		"fields": {"key,title,ratings_average,ratings_count,cover_i,subject"},
 	}
 	if author != "" {
 		params.Set("author", author)
@@ -287,29 +369,40 @@ func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string) (
 	}
 	var data struct {
 		Docs []struct {
-			Key            string  `json:"key"`
-			RatingsAverage float64 `json:"ratings_average"`
-			RatingsCount   int     `json:"ratings_count"`
-			CoverI         int     `json:"cover_i"`
+			Key            string   `json:"key"`
+			RatingsAverage float64  `json:"ratings_average"`
+			RatingsCount   int      `json:"ratings_count"`
+			CoverI         int      `json:"cover_i"`
+			Subject        []string `json:"subject"`
 		} `json:"docs"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, err
 	}
+	var fallback *Result
 	for _, doc := range data.Docs {
-		if doc.RatingsAverage <= 0 {
-			continue
+		var tags []string
+		if withTags {
+			tags = doc.Subject
 		}
 		r := &Result{
 			Source:       SourceOpenLibrary,
 			Rating:       doc.RatingsAverage,
 			RatingsCount: doc.RatingsCount,
 			InfoURL:      p.OpenLibraryBase + doc.Key,
+			Tags:         tags,
 		}
 		if doc.CoverI > 0 {
 			r.CoverURL = fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-M.jpg", doc.CoverI)
 		}
-		return r, nil
+		if doc.RatingsAverage > 0 {
+			return r, nil
+		}
+		// Keep a subject-only match as a fallback so books without an
+		// Open Library rating can still contribute tags.
+		if fallback == nil && len(doc.Subject) > 0 {
+			fallback = r
+		}
 	}
-	return nil, nil
+	return fallback, nil
 }

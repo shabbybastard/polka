@@ -59,6 +59,8 @@ func (s *Store) migrate() error {
 				return err
 			}
 		}
+		// A fresh database already has the current schema.
+		version = schemaVersion
 	}
 	if version == 1 {
 		if _, err := tx.Exec(schemaV2); err != nil {
@@ -74,6 +76,18 @@ func (s *Store) migrate() error {
 	}
 	if version == 3 {
 		if _, err := tx.Exec(schemaV4); err != nil {
+			return err
+		}
+		version = 4
+	}
+	if version == 4 {
+		if _, err := tx.Exec(schemaV5); err != nil {
+			return err
+		}
+		version = 5
+	}
+	if version == 5 {
+		if _, err := tx.Exec(schemaV6); err != nil {
 			return err
 		}
 	}

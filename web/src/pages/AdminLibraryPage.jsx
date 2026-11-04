@@ -1,7 +1,16 @@
 import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchSettings, importInpx, importStatus, saveSettings, testSmtp, uploadBooks } from "../api/manage";
+import {
+  fetchSettings,
+  genreSyncStatus,
+  importInpx,
+  importStatus,
+  saveSettings,
+  syncGenres,
+  testSmtp,
+  uploadBooks,
+} from "../api/manage";
 import { deleteCollection, fetchCollections, importCollection, rematchCollection, syncCollectionSource } from "../api/collections";
 import "./AdminLibraryPage.css";
 
@@ -11,6 +20,11 @@ const ENRICH_SOURCES = () => [
   { id: "open_library", label: "Open Library", hint: t("admin.openlibrary.hint") },
 ];
 
+const TAG_SOURCES = () => [
+  { id: "livelib", label: "LiveLib", hint: t("admin.tags.livelib") },
+  { id: "open_library", label: "Open Library", hint: t("admin.tags.openlibrary") },
+];
+
 const PHASE_LABELS = () => ({
   starting: t("admin.import.starting"),
   clearing: t("admin.import.clearing"),
@@ -18,7 +32,12 @@ const PHASE_LABELS = () => ({
   indexing: t("admin.import.indexing"),
 });
 
-const AdminLibraryPage = () => {
+// External collection sources (Forbes) are temporarily hidden from the
+// UI: the backend and its settings stay intact, so the block below can be
+// restored by flipping this flag instead of reverting code.
+const SHOW_COLLECTION_SOURCES = false;
+
+const AdminLibraryPage = ({ onConfigChange }) => {
   // --- Book upload ---
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
@@ -97,8 +116,12 @@ const AdminLibraryPage = () => {
 
   // --- Sources for external ratings and similar books ---
   const [enrichment, setEnrichment] = useState(null);
+  const [tagSources, setTagSources] = useState({ livelib: false, open_library: false });
+  const [genreStatus, setGenreStatus] = useState(null);
+  const genrePolling = useRef(null);
   const [similar, setSimilar] = useState(null);
   const [tastediveKey, setTastediveKey] = useState("");
+  const [homeHero, setHomeHero] = useState(true);
   const [opdsEnabled, setOpdsEnabled] = useState(true);
   const [opdsCopied, setOpdsCopied] = useState(false);
   const [smtp, setSmtp] = useState(null);
@@ -107,13 +130,41 @@ const AdminLibraryPage = () => {
   const [library, setLibrary] = useState(null);
   const [colSources, setColSources] = useState(null);
 
+  const pollGenreStatus = () => {
+    genreSyncStatus()
+      .then((st) => {
+        setGenreStatus(st);
+        if (st.running) {
+          if (!genrePolling.current) {
+            genrePolling.current = setInterval(pollGenreStatus, 1000);
+          }
+        } else if (genrePolling.current) {
+          clearInterval(genrePolling.current);
+          genrePolling.current = null;
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    pollGenreStatus();
+    return () => {
+      if (genrePolling.current) {
+        clearInterval(genrePolling.current);
+        genrePolling.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     fetchSettings()
       .then((res) => {
         setEnrichment(res.enrichment ?? null);
+        setTagSources({ livelib: false, open_library: false, ...(res.tagSources ?? {}) });
         setColSources(res.collectionSources ?? []);
         setSimilar(res.similar ?? null);
         setTastediveKey(res.tastediveKey ?? "");
+        setHomeHero(res.homeHero !== false);
         setOpdsEnabled(res.opdsEnabled !== false);
         setSmtp(res.smtp ?? { security: "starttls", port: 587 });
         setLibrary(res.library ?? null);
@@ -135,6 +186,26 @@ const AdminLibraryPage = () => {
     });
   };
 
+  const toggleTagSource = (id) => {
+    const next = { ...tagSources, [id]: !tagSources[id] };
+    setTagSources(next);
+    saveSettings({ tagSources: next }).catch(() => {
+      setTagSources(tagSources);
+      alert(t("admin.sources.saveFail"));
+    });
+  };
+
+  const startGenreSync = () => {
+    if (!tagSources.livelib && !tagSources.open_library) {
+      alert(t("admin.genres.noSource"));
+      return;
+    }
+    if (!confirm(t("admin.genres.confirm"))) return;
+    syncGenres()
+      .then(() => pollGenreStatus())
+      .catch((err) => alert(err.status === 409 ? t("admin.genres.running") : t("admin.genres.fail")));
+  };
+
   const toggleSimilar = (id) => {
     const next = { ...similar, [id]: !similar[id] };
     setSimilar(next);
@@ -151,6 +222,19 @@ const AdminLibraryPage = () => {
         alert(t("admin.tastedive.saved"));
       })
       .catch(() => alert(t("admin.tastedive.saveFail")));
+  };
+
+  const toggleHomeHero = () => {
+    const next = !homeHero;
+    setHomeHero(next);
+    saveSettings({ homeHero: next })
+      // Root owns the config used by HomePage; refresh it so the banner
+      // appears/disappears without a full page reload.
+      .then(() => onConfigChange?.())
+      .catch(() => {
+        setHomeHero(!next);
+        alert(t("admin.sources.saveFail"));
+      });
   };
 
   const opdsUrl = `${window.location.origin}/opds`;
@@ -333,6 +417,15 @@ const AdminLibraryPage = () => {
       </section>
 
       <section className="library-admin__section">
+        <h2>{t("admin.home")}</h2>
+        <p className="library-admin__hint">{t("admin.home.hint")}</p>
+        <label className="library-admin__source library-admin__opds-toggle">
+          <input type="checkbox" checked={homeHero} onChange={toggleHomeHero} />
+          <span className="library-admin__source-name">{t("admin.home.hero")}</span>
+        </label>
+      </section>
+
+      <section className="library-admin__section">
         <h2>{t("admin.collections")}</h2>
         <p className="library-admin__hint">
           {t("admin.collections.hint")}{" "}
@@ -356,7 +449,7 @@ const AdminLibraryPage = () => {
             <span className={colMsg.ok ? "library-admin__ok" : "library-admin__error"}>{colMsg.text}</span>
           )}
         </div>
-        {colSources && colSources.length > 0 && (
+        {SHOW_COLLECTION_SOURCES && colSources && colSources.length > 0 && (
           <>
             <h3 className="library-admin__subtitle">{t("admin.collections.sources")}</h3>
             <ul className="library-admin__sources">
@@ -520,6 +613,57 @@ const AdminLibraryPage = () => {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="library-admin__section">
+        <h2>{t("admin.tags")}</h2>
+        <p className="library-admin__hint">{t("admin.tags.hint")}</p>
+        {!enrichment && <div className="library-admin__hint">{t("admin.sources.loading")}</div>}
+        {enrichment && (
+          <ul className="library-admin__sources">
+            {TAG_SOURCES().map((src) => (
+              <li key={src.id}>
+                <label className="library-admin__source">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(tagSources[src.id])}
+                    onChange={() => toggleTagSource(src.id)}
+                    aria-label={src.hint}
+                  />
+                  <span className="library-admin__source-name">{src.label}</span>
+                  <span className="library-admin__source-hint">{src.hint}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        {enrichment && (
+          <div className="library-admin__key-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={startGenreSync}
+              disabled={
+                Boolean(genreStatus?.running) ||
+                (!tagSources.livelib && !tagSources.open_library)
+              }
+            >
+              {genreStatus?.running ? t("admin.genres.syncing") : t("admin.genres.sync")}
+            </button>
+            {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
+              <span className="library-admin__source-hint">
+                {t("admin.genres.progress", {
+                  processed: Number(genreStatus.processed).toLocaleString(),
+                  total: Number(genreStatus.total).toLocaleString(),
+                  updated: Number(genreStatus.updated).toLocaleString(),
+                })}
+              </span>
+            )}
+            {genreStatus?.error && (
+              <span className="library-admin__error">{genreStatus.error}</span>
+            )}
+          </div>
         )}
       </section>
 

@@ -28,6 +28,18 @@ func (c *readerCache) get(id int64) *library.FB2Text {
 	return c.entries[id]
 }
 
+func (c *readerCache) forget(id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, id)
+	for i, v := range c.order {
+		if v == id {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}
+
 func (c *readerCache) put(id int64, text *library.FB2Text) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -206,6 +218,21 @@ func (s *Server) handleReadProgress(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		// Public mode without login: the position is stored in the browser.
 		writeJSON(w, map[string]any{"stored": false})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		if err := s.users.DeleteProgress(r.Context(), u.ID, bookID); err != nil {
+			s.apiError(w, err)
+			return
+		}
+		// KOReader positions are keyed by file digest rather than book id;
+		// clear the ones that map to this book so they cannot silently
+		// restore the progress we just forgot.
+		if digests, err := s.st.BookDigests(r.Context(), bookID); err == nil {
+			s.users.DeleteKosyncByDocuments(r.Context(), u.ID, digests)
+		}
+		writeJSON(w, map[string]any{"stored": false, "deleted": true})
 		return
 	}
 

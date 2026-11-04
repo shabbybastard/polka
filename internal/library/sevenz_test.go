@@ -32,7 +32,12 @@ func TestOpen7zWithZipName(t *testing.T) {
 	rc2.Close()
 }
 
-func min(a, b int) int { if a < b { return a }; return b }
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func TestSidecarCover(t *testing.T) {
 	root := os.Getenv("ROOT")

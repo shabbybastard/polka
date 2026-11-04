@@ -59,6 +59,7 @@ func (s *Server) registerSyncRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/read/{id}/img/{imgId}", s.syncReadImage)
 	mux.HandleFunc("GET /api/v1/read/{id}/progress", s.handleReadProgress)
 	mux.HandleFunc("POST /api/v1/read/{id}/progress", s.syncAfter(s.handleReadProgress))
+	mux.HandleFunc("DELETE /api/v1/read/{id}/progress", s.syncAfter(s.handleReadProgress))
 
 	// Offline cache management
 	mux.HandleFunc("GET /api/v1/offline", s.handleOfflineList)

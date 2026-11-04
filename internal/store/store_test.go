@@ -105,6 +105,10 @@ func TestMigrateFromV1(t *testing.T) {
 		}
 		legacy = strings.Replace(legacy, line, "", 1)
 	}
+	// v1 genres had no source column.
+	legacy = strings.Replace(legacy,
+		"\tname   TEXT NOT NULL DEFAULT '',\n\tsource TEXT NOT NULL DEFAULT ''\n",
+		"\tname   TEXT NOT NULL DEFAULT ''\n", 1)
 	legacy = strings.Replace(legacy, "\tdeleted    INTEGER NOT NULL DEFAULT 0,\n", "\tdeleted    INTEGER NOT NULL DEFAULT 0\n", 1)
 	// v1 databases had no digests table either (added in v4).
 	digests := legacy[strings.Index(legacy, "-- KOReader"):strings.Index(legacy, "CREATE VIRTUAL TABLE book_search")]
@@ -391,6 +395,63 @@ func TestBookDetailsAndFiles(t *testing.T) {
 	}
 	if folders, _ = st.SampleFolders(ctx, 1); len(folders) != 1 {
 		t.Errorf("sample folders limit: %v", folders)
+	}
+}
+
+func TestUpdateBookMetadata(t *testing.T) {
+	st, ids := newLibrary(t)
+	ctx := context.Background()
+	id := ids["Вишневый сад"]
+
+	if err := st.UpdateBookMetadata(ctx, id, "Новая пьеса", []AuthorName{
+		{Last: "Иванов", First: "Иван"}, {Last: "Толстой", First: "Лев"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := st.BookDetails(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Title != "Новая пьеса" {
+		t.Errorf("title = %q", d.Title)
+	}
+	if len(d.Authors) != 2 || d.AuthorNames == "" {
+		t.Errorf("authors = %+v (%q)", d.Authors, d.AuthorNames)
+	}
+
+	if got := must(st.SearchTitles(ctx, "Новая", 10)); len(got) != 1 || got[0].ID != id {
+		t.Errorf("new title must be searchable: %v", titles(got))
+	}
+	if got := must(st.SearchTitles(ctx, "Вишнев", 10)); len(got) != 0 {
+		t.Errorf("old title still in FTS: %v", titles(got))
+	}
+	if got := must(st.SearchBooks(ctx, "Иванов", 10, 0)); len(got) != 1 || got[0].ID != id {
+		t.Errorf("new author must be searchable: %v", titles(got))
+	}
+	found, _ := st.SearchAuthors(ctx, "Иванов", 10)
+	if len(found) != 1 || found[0].Books != 1 {
+		t.Errorf("authors index: %+v", found)
+	}
+
+	// Reusing an existing author must link to the existing row.
+	var authorsBefore int
+	st.DB().QueryRow(`SELECT count(*) FROM authors`).Scan(&authorsBefore)
+	if err := st.UpdateBookMetadata(ctx, id, "Новая пьеса", []AuthorName{{Last: "Толстой", First: "Лев"}}); err != nil {
+		t.Fatal(err)
+	}
+	var authorsAfter, links int
+	st.DB().QueryRow(`SELECT count(*) FROM authors`).Scan(&authorsAfter)
+	st.DB().QueryRow(`SELECT count(*) FROM book_authors WHERE book_id = ?`, id).Scan(&links)
+	if authorsAfter != authorsBefore || links != 1 {
+		t.Errorf("author reuse: authors %d->%d, links %d", authorsBefore, authorsAfter, links)
+	}
+
+	if err := st.UpdateBookMetadata(ctx, id, "   ", nil); err == nil {
+		t.Error("empty title must be rejected")
+	}
+	if err := st.UpdateBookMetadata(ctx, 999999, "x", nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown book: %v", err)
 	}
 }
 

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS reading_progress (
 	position   REAL NOT NULL DEFAULT 0,
 	overall    REAL NOT NULL DEFAULT 0,
 	locator    TEXT NOT NULL DEFAULT '',
+	deleted    INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY (user_id, book_id)
 ) WITHOUT ROWID;
@@ -28,6 +29,9 @@ CREATE INDEX IF NOT EXISTS idx_progress_updated ON reading_progress (user_id, up
 func migrateProgress(db *sql.DB) {
 	db.Exec(`ALTER TABLE reading_progress ADD COLUMN overall REAL NOT NULL DEFAULT 0`)
 	db.Exec(`ALTER TABLE reading_progress ADD COLUMN locator TEXT NOT NULL DEFAULT ''`)
+	// deleted is a tombstone: a removed position must still be exported
+	// and merged, otherwise another device would restore the old progress.
+	db.Exec(`ALTER TABLE reading_progress ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
 }
 
 type Progress struct {
@@ -44,19 +48,35 @@ type Progress struct {
 // offline) would compare equal and the later one would be dropped.
 func (s *Service) SaveProgress(ctx context.Context, userID, bookID int64, p Progress) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, deleted, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 0, strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		ON CONFLICT (user_id, book_id) DO UPDATE
 		SET chapter = excluded.chapter, position = excluded.position,
-		    overall = excluded.overall, locator = excluded.locator, updated_at = excluded.updated_at`,
+		    overall = excluded.overall, locator = excluded.locator,
+		    deleted = 0, updated_at = excluded.updated_at`,
 		userID, bookID, p.Chapter, p.Position, p.Overall, p.Locator)
+	return err
+}
+
+// DeleteProgress forgets a book's position for one user. The row is kept
+// as a timestamped tombstone so the removal travels to other devices via
+// the state sync instead of being resurrected by their older snapshot.
+func (s *Service) DeleteProgress(ctx context.Context, userID, bookID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, deleted, updated_at)
+		VALUES (?, ?, 0, 0, 0, '', 1, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		ON CONFLICT (user_id, book_id) DO UPDATE
+		SET chapter = 0, position = 0, overall = 0, locator = '',
+		    deleted = 1, updated_at = excluded.updated_at`,
+		userID, bookID)
 	return err
 }
 
 func (s *Service) GetProgress(ctx context.Context, userID, bookID int64) (Progress, error) {
 	p := Progress{BookID: bookID}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT chapter, position, overall, locator FROM reading_progress WHERE user_id = ? AND book_id = ?`,
+		`SELECT chapter, position, overall, locator FROM reading_progress
+		 WHERE user_id = ? AND book_id = ? AND deleted = 0`,
 		userID, bookID).Scan(&p.Chapter, &p.Position, &p.Overall, &p.Locator)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
@@ -69,7 +89,7 @@ func (s *Service) GetProgress(ctx context.Context, userID, bookID int64) (Progre
 func (s *Service) ListProgress(ctx context.Context, userID int64, limit int) ([]Progress, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT book_id, chapter, position, overall FROM reading_progress
-		WHERE user_id = ? AND overall < 0.98
+		WHERE user_id = ? AND deleted = 0 AND overall < 0.98
 		ORDER BY updated_at DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err

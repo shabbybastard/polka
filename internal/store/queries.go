@@ -34,11 +34,12 @@ type BookFile struct {
 // BookDetails is the full book card.
 type BookDetails struct {
 	Book
-	File    string
-	Folder  string
-	Authors []AuthorName
-	Series  []SeriesRef
-	Genres  []string
+	File       string
+	Folder     string
+	Authors    []AuthorName
+	Series     []SeriesRef
+	Genres     []string
+	GenreNames map[string]string // external genres have a display name
 }
 
 type SeriesRef struct {
@@ -414,14 +415,16 @@ func (s *Store) CatalogShelves(ctx context.Context, count, limit int) ([]Shelf, 
 // --- OPDS ---
 
 type GenreCount struct {
-	Code  string
-	Books int
+	Code   string
+	Name   string
+	Source string
+	Books  int
 }
 
 // GenresWithCounts returns genres that have live (non-deleted) books.
 func (s *Store) GenresWithCounts(ctx context.Context) ([]GenreCount, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT g.code, count(*)
+		SELECT g.code, g.name, g.source, count(*)
 		FROM genres g
 		JOIN book_genres bg ON bg.genre_id = g.id
 		JOIN books b ON b.id = bg.book_id AND b.deleted = 0
@@ -435,7 +438,7 @@ func (s *Store) GenresWithCounts(ctx context.Context) ([]GenreCount, error) {
 	var out []GenreCount
 	for rows.Next() {
 		var g GenreCount
-		if err := rows.Scan(&g.Code, &g.Books); err != nil {
+		if err := rows.Scan(&g.Code, &g.Name, &g.Source, &g.Books); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -497,18 +500,22 @@ func (s *Store) BookDetails(ctx context.Context, bookID int64) (*BookDetails, er
 	}
 
 	grows, err := s.db.QueryContext(ctx, `
-		SELECT g.code FROM book_genres bg JOIN genres g ON g.id = bg.genre_id
+		SELECT g.code, g.name FROM book_genres bg JOIN genres g ON g.id = bg.genre_id
 		WHERE bg.book_id = ?`, bookID)
 	if err != nil {
 		return nil, err
 	}
 	defer grows.Close()
+	d.GenreNames = map[string]string{}
 	for grows.Next() {
-		var code string
-		if err := grows.Scan(&code); err != nil {
+		var code, name string
+		if err := grows.Scan(&code, &name); err != nil {
 			return nil, err
 		}
 		d.Genres = append(d.Genres, code)
+		if name != "" {
+			d.GenreNames[code] = name
+		}
 	}
 	return d, grows.Err()
 }

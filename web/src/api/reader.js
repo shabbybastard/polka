@@ -15,6 +15,16 @@ export const saveProgress = (bookId, chapter, position, progress, locator = "") 
     body: JSON.stringify({ chapter, position, progress, locator }),
   }).catch(() => {});
 
+export const deleteProgress = async (bookId) => {
+  const res = await fetch(api.buildUrl(`api/v1/read/${bookId}/progress`), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { "X-Polka-Lang": getLang() },
+  });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+};
+
 // Fallback when the server does not store the position (public mode, no login).
 export const localProgress = {
   get(bookId) {
@@ -29,6 +39,13 @@ export const localProgress = {
       localStorage.setItem(`polka-read-${bookId}`, JSON.stringify({ chapter, position }));
     } catch {
       /* quota exceeded — no big deal */
+    }
+  },
+  clear(bookId) {
+    try {
+      localStorage.removeItem(`polka-read-${bookId}`);
+    } catch {
+      /* ignore */
     }
   },
 };

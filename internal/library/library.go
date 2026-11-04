@@ -17,7 +17,10 @@ import (
 	"github.com/bodgit/sevenzip"
 )
 
-var ErrNoFile = errors.New("book file not found")
+var (
+	ErrNoFile      = errors.New("book file not found")
+	ErrNotBareFile = errors.New("editing is only supported for a bare EPUB file")
+)
 
 type Library struct {
 	root string
@@ -366,6 +369,58 @@ func (z *zipEntryReader) Close() error {
 }
 
 // Cover returns a book cover (for fb2), cached in memory.
+// ReplaceBareEPUB atomically replaces a bare EPUB file and returns its
+// previous contents. Files inside ZIP/7z archives cannot be edited.
+func (l *Library) ReplaceBareEPUB(folder, file, ext string, data []byte) ([]byte, error) {
+	name := file + "." + ext
+	if !strings.EqualFold(ext, "epub") || !pathInside(l.root, folder) || strings.ContainsAny(name, `/\`) {
+		return nil, ErrNotBareFile
+	}
+	dir := filepath.Join(l.root, filepath.FromSlash(folder))
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return nil, ErrNotBareFile
+	}
+	target := filepath.Join(dir, name)
+	fi, err = os.Stat(target)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil, ErrNotBareFile
+	}
+	old, err := os.ReadFile(target)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(dir, ".polka-epub-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return nil, err
+	}
+	return old, nil
+}
+
+// ForgetCover drops a cached cover after the book file is edited.
+func (l *Library) ForgetCover(bookID int64) {
+	l.mu.Lock()
+	delete(l.covers, bookID)
+	l.mu.Unlock()
+}
+
 func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string, error) {
 	l.mu.Lock()
 	if c, ok := l.covers[bookID]; ok {
@@ -575,13 +630,33 @@ func (l *Library) Binary(folder, file, ext, id string) ([]byte, string, error) {
 
 // Meta extracts FB2 metadata (annotation, publish info) without the cover.
 func (l *Library) Meta(folder, file, ext string) (*FB2Meta, error) {
-	if !strings.EqualFold(ext, "fb2") {
-		return nil, ErrNoFile
-	}
 	rc, _, err := l.Open(folder, file, ext)
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return ParseFB2(rc, false)
+
+	switch strings.ToLower(ext) {
+	case "fb2":
+		return ParseFB2(rc, false)
+	case "epub":
+		data, err := io.ReadAll(rc)
+		if err != nil {
+			return nil, err
+		}
+		meta, err := ParseEPUB(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, err
+		}
+		return &FB2Meta{
+			Title:          meta.Title,
+			Lang:           meta.Language,
+			AnnotationHTML: descriptionHTML(meta.Description),
+			Publisher:      meta.Publisher,
+			Year:           meta.Year,
+			ISBN:           meta.ISBN,
+		}, nil
+	default:
+		return nil, ErrNoFile
+	}
 }

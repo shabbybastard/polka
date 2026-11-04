@@ -160,14 +160,21 @@ func (s *Server) readingShelf(r *http.Request, userID int64, limit int) []map[st
 }
 
 func (s *Server) handleGetCatalogShelves(w http.ResponseWriter, r *http.Request) {
-	shelves, err := s.st.CatalogShelves(r.Context(), intParam(r, "count", 6), intParam(r, "limit", 12))
+	count := intParam(r, "count", 6)
+	limit := intParam(r, "limit", 12)
+	shelves, err := s.st.CatalogShelves(r.Context(), count, limit)
 	if err != nil {
 		s.apiError(w, err)
 		return
 	}
 	lang := reqLang(r)
 	for i := range shelves {
-		shelves[i].Title = genres.NameLang(strings.TrimPrefix(shelves[i].Title, "genre_"), lang)
+		if strings.HasPrefix(shelves[i].ID, "genre_") {
+			code := strings.TrimPrefix(shelves[i].ID, "genre_")
+			if shelves[i].Title == "" || shelves[i].Title == code {
+				shelves[i].Title = genres.NameLang(code, lang)
+			}
+		}
 	}
 	writeJSON(w, map[string]any{"shelves": shelvesJSON(shelves)})
 }
@@ -195,8 +202,10 @@ func (s *Server) handleGetShelfBooks(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		books = books[:limit]
 	}
-	if strings.HasPrefix(shelfID, "genre_") {
-		title = genres.NameLang(strings.TrimPrefix(shelfID, "genre_"), reqLang(r))
+	if code, ok := strings.CutPrefix(shelfID, "genre_"); ok {
+		if title == "" || title == code {
+			title = genres.NameLang(code, reqLang(r))
+		}
 	}
 	writeJSON(w, map[string]any{
 		"titlesList": booksJSON(books),
@@ -331,7 +340,10 @@ func (s *Server) handleGetBookForm(w http.ResponseWriter, r *http.Request) {
 	genreNames := make([]string, 0, len(d.Genres))
 	genreList := make([]map[string]any, 0, len(d.Genres))
 	for _, code := range d.Genres {
-		name := genres.NameLang(code, reqLang(r))
+		name := d.GenreNames[code]
+		if name == "" {
+			name = genres.NameLang(code, reqLang(r))
+		}
 		genreNames = append(genreNames, name)
 		genreList = append(genreList, map[string]any{"code": code, "name": name})
 	}
@@ -385,6 +397,7 @@ func (s *Server) handleGetBookForm(w http.ResponseWriter, r *http.Request) {
 			resp["city"] = meta.City
 			resp["year"] = meta.Year
 			resp["isbn"] = meta.ISBN
+			resp["language"] = meta.Lang
 			// Lazy indexing: the ISBN from the file becomes searchable.
 			s.st.SetBookISBN(r.Context(), d.ID, meta.ISBN)
 		} else if !errors.Is(err, library.ErrNoFile) {
@@ -502,10 +515,6 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 	if f == nil {
 		return
 	}
-	if !strings.EqualFold(f.Ext, "fb2") {
-		http.NotFound(w, r)
-		return
-	}
 	rc, _, err := s.lib.Open(f.Folder, f.File, f.Ext)
 	if err != nil {
 		s.apiError(w, err)
@@ -518,10 +527,28 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, err)
 		return
 	}
-	compact := library.StripBinaries(data)
-	w.Header().Set("Content-Type", contentTypeFor("fb2"))
-	w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.compact.fb2"`)
-	w.Write(compact)
+
+	switch strings.ToLower(f.Ext) {
+	case "fb2":
+		w.Header().Set("Content-Type", contentTypeFor("fb2"))
+		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.compact.fb2"`)
+		w.Write(library.StripBinaries(data))
+	case "txt":
+		w.Header().Set("Content-Type", contentTypeFor("txt"))
+		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.txt"`)
+		w.Write(data)
+	case "epub":
+		text, err := library.EPUBPlainText(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			s.apiError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", contentTypeFor("txt"))
+		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.txt"`)
+		w.Write([]byte(text))
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func contentTypeFor(ext string) string {

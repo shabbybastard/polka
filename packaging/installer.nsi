@@ -36,7 +36,7 @@ Section "Полка"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Polka" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Polka" "DisplayIcon" "$INSTDIR\polka.ico"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Polka" "UninstallString" "$INSTDIR\uninstall.exe"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Polka" "Publisher" "pposevalnikov"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Polka" "Publisher" "shabbybastard"
 SectionEnd
 
 Section "Uninstall"

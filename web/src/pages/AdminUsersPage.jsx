@@ -54,6 +54,18 @@ const AdminUsersPage = ({ me }) => {
     updateUser(u.id, { password }).then(() => alert(t("users.passwordDone"))).catch(showError);
   };
 
+  const rename = (u) => {
+    const name = prompt(t("users.namePrompt", { login: u.login }), u.displayName || "");
+    if (name === null) return;
+    updateUser(u.id, { displayName: name.trim() })
+      .then(() => {
+        // The top bar keeps its own copy of the current user.
+        if (u.id === me?.id) window.location.reload();
+        else reload();
+      })
+      .catch(showError);
+  };
+
   const remove = (u) => {
     if (!confirm(t("users.deleteConfirm", { login: u.login }))) return;
     deleteUser(u.id).then(reload).catch(showError);
@@ -95,6 +107,9 @@ const AdminUsersPage = ({ me }) => {
                 </td>
                 <td>{u.disabled ? t("users.disabled") : t("users.active")}</td>
                 <td className="users-table__actions">
+                  <button type="button" className="btn btn-link" onClick={() => rename(u)}>
+                    {t("users.rename")}
+                  </button>
                   <button type="button" className="btn btn-link" onClick={() => resetPassword(u)}>
                     {t("users.password")}
                   </button>

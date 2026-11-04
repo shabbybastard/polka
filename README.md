@@ -8,6 +8,13 @@ and get a polished web interface with search, covers, annotations, an online
 reader, reading lists, ratings, recommendations, and an OPDS feed for every
 mobile reading app.
 
+> **This is a fork.** The original project is
+> [vestigiumincaligne/polka](https://github.com/vestigiumincaligne/polka).
+> Fork releases use the version pattern `v<upstream>-fork.<n>`
+> (current: `v0.1.22-fork.3`); upstream changes are merged selectively
+> when they contain features we want. The binary reports the same version
+> without the leading `v`, while deb/rpm packages use `0.1.22+fork.3` so
+> they sort above upstream `0.1.22`.
 
 ![Polka home page — personal shelves with covers, search, and reading progress](docs/screenshot-home.png)
 
@@ -31,13 +38,18 @@ mobile reading app.
 - **Reading lists & ratings.** Build custom lists, mark books you want to read,
   rate books 1–5 — average ratings are visible to everyone on your server.
   External ratings (LiveLib, Google Books, Open Library) can be enabled per
-  source by the admin.
+  source by the admin. External genres (LiveLib genres and Open Library
+  subjects) can be merged into the catalog; both sources are off by default
+  and disabling one removes the genres it contributed.
+- **Admin tools.** Edit a book's title, authors, EPUB metadata and cover, change
+  user display names, hide the home-page hero banner, reset a reader's progress
+  when a position is no longer wanted, and bulk-load external genres for the
+  whole catalog.
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
   the listed books you already have. Add your own as a JSON list of
-  "author + title", or enable an external source (Forbes.ru book selections,
-  polled daily; off by default). See [`collections/`](collections/README.md).
+  "author + title". See [`collections/`](collections/README.md).
 - **OPDS catalog.** Connect Moon+ Reader, KOReader, FBReader, or any other
   OPDS-capable app: new books, browse by author, series and genre, your
   "reading now" shelf, and search.
@@ -54,8 +66,10 @@ mobile reading app.
 - **Add books from the browser.** Upload fb2 / epub / pdf / djvu / txt / mobi;
   metadata is extracted automatically and three-level duplicate detection
   (file hash → text hash → fuzzy metadata) keeps your collection clean.
-- **Two languages.** English and Russian UI, switchable in one click; genre
-  names and the OPDS feed are localized too.
+- **Two languages, three themes.** English and Russian UI, switchable in one
+  click; genre names and the OPDS feed are localized too. The interface
+  follows the system theme or can be forced to a light or graphite-gray dark
+  palette from the top bar.
 - **Mobile-friendly + PWA.** Add Polka to your phone's home screen and it
   behaves like an app.
 - **Desktop apps that don't need a server.** Native-feel clients for Windows
@@ -73,7 +87,7 @@ docker run -d --name polka \
   -p 12791:12791 \
   -v polka-data:/data \
   -v /path/to/your/books:/books \
-  ghcr.io/vestigiumincaligne/polka:latest
+  ghcr.io/shabbybastard/polka:latest
 ```
 
 Open `http://localhost:12791`, sign in with the bootstrap admin account
@@ -115,10 +129,19 @@ polka serve --library-dir /path/to/books
 Requires Go 1.26+ and Node 20+.
 
 ```sh
-git clone https://github.com/vestigiumincaligne/polka
+git clone https://github.com/shabbybastard/polka
 cd polka
 make build        # builds web UI + bin/polka + bin/polka-desktop
 ./bin/polka serve --library-dir /path/to/books
+```
+
+To pull a feature from the original project later, add its repository as a
+remote and merge it deliberately:
+
+```sh
+git remote add upstream https://github.com/vestigiumincaligne/polka
+git fetch upstream --tags
+git merge upstream/main        # or cherry-pick a single feature
 ```
 
 ## Importing a large catalog
@@ -154,6 +177,17 @@ app window on Linux) and can work two ways:
   the full catalog is available online, selected books are downloaded for
   offline reading, and progress / ratings / lists sync both ways automatically.
 
+## Editing EPUB metadata
+
+Administrators can open a book and edit its EPUB metadata directly in Polka:
+title, authors, language, publisher, year, ISBN, description and cover. The
+cover is resized to 1600 px and stored as a compact JPEG.
+
+This works for bare `.epub` files; books inside ZIP/7z archives stay read-only.
+The original file is copied to `<data-dir>/epub-backups/<book-id>/` before the
+atomic replacement, and backups older than seven days are removed once a day
+at 03:00 server time.
+
 ## OPDS
 
 Point your reading app at `http://your-server:12791/opds` — no converting or
@@ -186,12 +220,13 @@ Everything has a sensible default. The most useful flags of `polka serve`:
 | `--addr` | `:12791` | listen address |
 | `--data-dir` | `~/.polka` | database, settings, covers cache |
 | `--library-dir` | — | folder with books (or inpx archives) |
-| `--auth` | `users` | `users` (accounts) or `none` (open access) |
+| `--auth` | `required` | `required` (accounts), `public` (open access) or `demo` (ephemeral guest sessions); the desktop app sets `desktop` internally |
 
 External rating/recommendation sources are configured in the web UI
 (*Manage → External ratings / Similar books*) and are **off by default**
 except local recommendations — nothing is queried without the admin's
-consent.
+consent. External genre sources are a separate switch and are also off by
+default.
 
 ## Tech notes
 
@@ -201,15 +236,29 @@ consent.
   separately from the catalog and survives re-imports; so do curated
   collections, which are re-matched against the catalog after every import.
 - Sync between desktop clients and the server is state-based with
-  last-write-wins per record.
+  last-write-wins per record. Forgetting reading progress writes a timestamped
+  tombstone, so the removal propagates to other devices instead of being
+  restored from an older snapshot.
+- External genres are cached together with ratings; enabling a source after
+  the cache was filled without genres refreshes the affected book lazily.
 
-## Support the project ❤️
+## About this fork
 
-Polka is free and MIT-licensed. If it made your library nicer, you can support
-development through the **Sponsor** button on this repository — it genuinely
-helps.
+This repository is a fork of
+[vestigiumincaligne/polka](https://github.com/vestigiumincaligne/polka).
+The original Polka was created by its authors and contributors; all credit for
+the upstream project belongs to them. Please support the original project and
+report upstream bugs there.
 
-Bug reports and feature ideas are welcome in [Issues](../../issues).
+Fork-specific changes are kept in small, separate commits so upstream features
+can still be merged when they are worth taking. Fork releases are tagged
+`v<upstream>-fork.<n>` (for example `v0.1.22-fork.3`). The current version is
+also stored in [`VERSION`](VERSION) for local `make build`; release tags should
+match it.
+
+## Neuroslop warning
+
+The original code has been modified by AI.
 
 ## License
 

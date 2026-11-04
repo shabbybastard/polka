@@ -148,6 +148,50 @@ func htmlUnescape(s string) string {
 	return r.Replace(s)
 }
 
+// EPUBPlainText extracts readable text from an EPUB without images or
+// markup. The "text only" download uses it for .epub files, where the FB2
+// binary-stripping approach does not apply.
+func EPUBPlainText(r io.ReaderAt, size int64) (string, error) {
+	text, err := EPUBText(r, size, func(string) string { return "" })
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	for _, chapter := range text.Chapters {
+		if title := strings.TrimSpace(chapter.Title); title != "" {
+			out.WriteString(title)
+			out.WriteString("\n\n")
+		}
+		out.WriteString(htmlFragmentText(chapter.HTML))
+		out.WriteString("\n\n")
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+var textBlockTags = map[string]bool{
+	"p": true, "div": true, "br": true, "li": true, "tr": true,
+	"blockquote": true, "pre": true, "h1": true, "h2": true, "h3": true,
+	"h4": true, "h5": true, "h6": true,
+}
+
+func htmlFragmentText(fragment string) string {
+	z := html.NewTokenizer(strings.NewReader(fragment))
+	var out strings.Builder
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return strings.TrimSpace(out.String())
+		case html.TextToken:
+			out.WriteString(htmlUnescape(string(z.Text())))
+		case html.StartTagToken, html.SelfClosingTagToken, html.EndTagToken:
+			name, _ := z.TagName()
+			if textBlockTags[string(name)] {
+				out.WriteByte('\n')
+			}
+		}
+	}
+}
+
 // epubChapterHTML extracts the body of a spine document as sanitized
 // HTML. The chapter title is taken from the first heading.
 func epubChapterHTML(r io.Reader, baseDir string, imgURL func(string) string, imgDims func(string) (int, int)) (title, body string) {

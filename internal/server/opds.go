@@ -294,9 +294,17 @@ func (s *Server) handleOpdsGenres(w http.ResponseWriter, r *http.Request) {
 		store.GenreCount
 		Name string
 	}
+	enabled := s.enabledTagSources(r.Context())
 	named := make([]namedGenre, 0, len(list))
 	for _, g := range list {
-		named = append(named, namedGenre{g, genres.NameLang(g.Code, lang)})
+		if g.Source != "" && !enabled[g.Source] {
+			continue
+		}
+		name := g.Name
+		if name == "" {
+			name = genres.NameLang(g.Code, lang)
+		}
+		named = append(named, namedGenre{g, name})
 	}
 	// Genres with a Russian name come first, raw codes go to the end.
 	sort.Slice(named, func(i, j int) bool {
@@ -326,16 +334,19 @@ func (s *Server) handleOpdsGenres(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpdsGenre(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 	page := opdsPage(r)
-	books, _, err := s.st.ShelfBooks(r.Context(), "genre_"+code, opdsPageSize+1, page*opdsPageSize)
+	books, title, err := s.st.ShelfBooks(r.Context(), "genre_"+code, opdsPageSize+1, page*opdsPageSize)
 	if err != nil {
 		s.apiError(w, err)
 		return
+	}
+	if title == "" || title == code {
+		title = genres.NameLang(code, reqLang(r))
 	}
 	hasMore := len(books) > opdsPageSize
 	if hasMore {
 		books = books[:opdsPageSize]
 	}
-	s.writeFeed(w, s.acquisitionFeed("urn:polka:genre:"+code, genres.NameLang(code, reqLang(r)), "/opds/genre/"+code, page, books, hasMore))
+	s.writeFeed(w, s.acquisitionFeed("urn:polka:genre:"+code, title, "/opds/genre/"+code, page, books, hasMore))
 }
 
 // GET /opds/search?q= — search by title/author/series.

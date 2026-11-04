@@ -1,10 +1,25 @@
 package library
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestEPUBPlainText(t *testing.T) {
+	data := epubZip(t, false, true)
+	text, err := EPUBPlainText(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "Hello epub world") {
+		t.Errorf("plain text: %q", text)
+	}
+	if strings.Contains(text, "<p>") || strings.Contains(text, "<b>") {
+		t.Errorf("markup leaked into plain text: %q", text)
+	}
+}
 
 func TestEPUBTextOnRealFile(t *testing.T) {
 	path := os.Getenv("EPUB")

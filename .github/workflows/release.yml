@@ -48,12 +48,14 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: "0"
+          REF_NAME: ${{ github.ref_name }}
         run: |
+          VERSION="${REF_NAME#v}"
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -ldflags "-s -w -X main.version=$VERSION" \
             -o polka-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/polka
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -ldflags "-s -w -X main.version=$VERSION" \
             -o polka-desktop-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/polka-desktop
 
       - uses: actions/upload-artifact@v4
@@ -93,14 +95,17 @@ jobs:
       - name: Build deb and rpm (amd64, arm64)
         run: |
           export VERSION="${GITHUB_REF_NAME#v}"
+          # deb/rpm sort "-fork.1" as a prerelease below the upstream
+          # version; "+fork.1" keeps fork packages newer than 0.1.22.
+          export PKG_VERSION="${VERSION/-fork./+fork.}"
           mkdir -p bin
           for arch in amd64 arm64; do
             GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
               -ldflags "-s -w -X main.version=$VERSION" -o bin/polka ./cmd/polka
             GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
               -ldflags "-s -w -X main.version=$VERSION" -o bin/polka-desktop ./cmd/polka-desktop
-            PKG_ARCH=$arch go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package -f packaging/nfpm.yaml -p deb -t dist/
-            PKG_ARCH=$arch go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package -f packaging/nfpm.yaml -p rpm -t dist/
+            VERSION="$PKG_VERSION" PKG_ARCH=$arch go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package -f packaging/nfpm.yaml -p deb -t dist/
+            VERSION="$PKG_VERSION" PKG_ARCH=$arch go run github.com/goreleaser/nfpm/v2/cmd/nfpm@latest package -f packaging/nfpm.yaml -p rpm -t dist/
           done
 
       - name: Build Windows installer
@@ -130,6 +135,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set image build version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -137,7 +145,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ env.VERSION }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:latest

@@ -131,6 +131,29 @@ func TestReadingShelfAndOpdsReading(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(feed), "Война и мир") {
 		t.Errorf("opds reading: %d %s", resp.StatusCode, feed)
 	}
+
+	// Forgetting the progress removes it from the shelf and from OPDS.
+	if got := code(t, c, "DELETE", f.ts.URL+"/api/v1/read/"+id+"/progress", ""); got != http.StatusOK {
+		t.Fatalf("forget progress -> %d", got)
+	}
+	if prog := getJSONWith(t, c, f.ts.URL+"/api/v1/read/"+id+"/progress"); prog["progress"].(float64) != 0 {
+		t.Errorf("progress after delete: %v", prog)
+	}
+	home = getJSONWith(t, c, f.ts.URL+"/main/getBooks/getHomeShelves")
+	for _, sh := range home["shelves"].([]any) {
+		if sh.(map[string]any)["id"] == "reading" {
+			t.Error("reading shelf still present after forgetting progress")
+		}
+	}
+	req, _ = http.NewRequest("GET", f.ts.URL+"/opds/reading", nil)
+	req.SetBasicAuth("reader", "reader123")
+	resp, _ = http.DefaultClient.Do(req)
+	feed, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(feed), "Война и мир") {
+		t.Error("OPDS reading still lists the book after forgetting progress")
+	}
+
 	// Series browsing in OPDS.
 	for _, p := range []string{"/opds/series/К", "/opds/series/id/" + itoa64(f.seriesID)} {
 		resp := do(t, c, "GET", f.ts.URL+p, "")
@@ -150,6 +173,62 @@ func TestReadingShelfAndOpdsReading(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(string(body), "/opds/authors/") {
 		t.Errorf("authors letters feed: %.200s", body)
+	}
+}
+
+func TestBookMetadataEdit(t *testing.T) {
+	f := newFullServer(t, "required")
+	id := itoa64(f.bookID)
+
+	// Readers cannot edit catalog metadata.
+	resp := postJSON(t, f.reader, f.ts.URL+"/admin/books/"+id+"/metadata",
+		map[string]any{"title": "Взлом", "authors": []any{}})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("reader edit -> %d, want 403", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = postJSON(t, f.admin, f.ts.URL+"/admin/books/"+id+"/metadata", map[string]any{
+		"title":   "Новая пьеса",
+		"authors": []map[string]string{{"last": "Иванов", "first": "Пётр"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin edit -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	form := getJSONWith(t, f.admin, f.ts.URL+"/main/getBooks/getBookForm?selectedItemID="+id)
+	book := form["bookForm"].(map[string]any)
+	if book["Title"] != "Новая пьеса" || book["AuthorsNames"] != "Иванов Пётр" {
+		t.Errorf("edited book form: %v", book)
+	}
+	authors := form["authors"].([]any)
+	if len(authors) != 1 || authors[0].(map[string]any)["LastName"] != "Иванов" {
+		t.Errorf("edited authors: %v", authors)
+	}
+
+	// The search index follows the edit: old title gone, new title and
+	// author found.
+	old := getJSONWith(t, f.admin, f.ts.URL+"/main/getBooks/getSearchTitles?search=Война")
+	if len(old["titlesList"].([]any)) != 0 {
+		t.Errorf("old title still searchable: %v", old["titlesList"])
+	}
+	res := getJSONWith(t, f.admin, f.ts.URL+"/main/getBooks/getSearchTitles?search=Новая")
+	if list := res["titlesList"].([]any); len(list) != 1 ||
+		int64(list[0].(map[string]any)["BookID"].(float64)) != f.bookID {
+		t.Errorf("new title after edit: %v", list)
+	}
+	res = getJSONWith(t, f.admin, f.ts.URL+"/main/getBooks/getSearchAuthors?search=Иванов")
+	if list := res["authorsList"].([]any); len(list) != 1 ||
+		list[0].(map[string]any)["Books"].(float64) != 1 {
+		t.Errorf("new author after edit: %v", list)
+	}
+
+	if resp := postJSON(t, f.admin, f.ts.URL+"/admin/books/"+id+"/metadata",
+		map[string]any{"title": "  ", "authors": []any{}}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("empty title -> %d, want 400", resp.StatusCode)
+	} else {
+		resp.Body.Close()
 	}
 }
 

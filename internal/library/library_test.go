@@ -428,8 +428,12 @@ func TestTextBinaryMeta(t *testing.T) {
 	if err != nil || meta.Title != "Тестовая книга" || len(meta.Cover) != 0 {
 		t.Errorf("meta (without cover): %+v %v", meta, err)
 	}
-	if _, err := l.Meta("a.zip", "3", "epub"); !errors.Is(err, ErrNoFile) {
-		t.Errorf("meta of non-fb2: %v", err)
+	epubMeta, err := l.Meta("a.zip", "3", "epub")
+	if err != nil || epubMeta.Title != "Test Epub" || epubMeta.Lang != "en" {
+		t.Errorf("epub meta: %+v %v", epubMeta, err)
+	}
+	if _, err := l.Meta("a.zip", "2", "txt"); !errors.Is(err, ErrNoFile) {
+		t.Errorf("meta of txt: %v", err)
 	}
 	if _, err := l.Meta("a.zip", "9", "fb2"); !errors.Is(err, ErrNoFile) {
 		t.Errorf("meta of missing book: %v", err)

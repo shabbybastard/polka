@@ -27,6 +27,22 @@ const post = async (path) => {
   return res.json();
 };
 
+const postJson = async (path, body) => {
+  const res = await fetch(api.buildUrl(path), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", "X-Polka-Lang": getLang() },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(text || `Request failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+};
+
 export const uploadBooks = (files, { force = false } = {}) => {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
@@ -36,6 +52,12 @@ export const uploadBooks = (files, { force = false } = {}) => {
 
 export const deleteBook = (id) => post(`admin/books/${id}/delete`);
 export const restoreBook = (id) => post(`admin/books/${id}/restore`);
+
+export const updateBookMetadata = (id, { title, authors }) =>
+  postJson(`admin/books/${id}/metadata`, { title, authors });
+
+export const updateBookEPUB = (id, formData) =>
+  postForm(`admin/books/${id}/epub`, formData);
 
 export const importInpx = ({ file, path, replace } = {}) => {
   const fd = new FormData();
@@ -50,6 +72,10 @@ export const importStatus = () => api.getJson("admin/import/status");
 export const exportUrl = (ids) => api.buildUrl(`Images/export?ids=${ids.join(",")}`);
 
 export const fetchSettings = () => api.getJson("admin/settings");
+
+export const syncGenres = () => post("admin/genres/sync");
+
+export const genreSyncStatus = () => api.getJson("admin/genres/status");
 
 export const testSmtp = () => post("admin/smtp/test");
 

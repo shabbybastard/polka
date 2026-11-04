@@ -3,13 +3,15 @@
 name: polka
 arch: ${PKG_ARCH}
 platform: linux
+# Package-safe version, e.g. 0.1.22+fork.1. The "-fork." suffix used by
+# git tags would be read as a prerelease by deb/rpm.
 version: ${VERSION}
-maintainer: pposevalnikov <noreply@github.com>
+maintainer: shabbybastard <17788445+shabbybastard@users.noreply.github.com>
 description: |
   Polka — a home library for e-books.
   Desktop app and server: catalog, online reading,
   lists, ratings, OPDS for mobile reader apps.
-homepage: https://github.com/pposevalnikov/polka
+homepage: https://github.com/shabbybastard/polka
 license: MIT
 
 contents:

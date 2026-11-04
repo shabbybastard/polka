@@ -6,8 +6,8 @@ import RatingStars from "../components/RatingStars";
 import RateStars from "../components/RateStars";
 import { fetchBookForm, fetchExternalEnrichment, fetchSimilarBooks } from "../api/fetchBooks";
 import Shelf from "../components/Shelf";
-import { deleteBook } from "../api/manage";
-import { fetchProgress } from "../api/reader";
+import { deleteBook, updateBookEPUB, updateBookMetadata } from "../api/manage";
+import { deleteProgress, fetchProgress, localProgress } from "../api/reader";
 import { rateBook } from "../api/ratings";
 import { toggleWishlist } from "../api/lists";
 import { fetchReaderEmail, setReaderEmail, sendBook } from "../api/send";
@@ -69,6 +69,7 @@ const BookPage = ({ user, sync }) => {
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [similar, setSimilar] = useState(null); // {similar: [], external: []}
   const [readProgress, setReadProgress] = useState(0);
+  const [forgetBusy, setForgetBusy] = useState(false);
   const [smtpReady, setSmtpReady] = useState(false);
   const [readerEmail, setReaderEmailState] = useState("");
   const [sendState, setSendState] = useState("idle");
@@ -78,6 +79,19 @@ const BookPage = ({ user, sync }) => {
   const [listIds, setListIds] = useState([]);
   const [wishlistId, setWishlistId] = useState(null);
   const [wishBusy, setWishBusy] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editAuthors, setEditAuthors] = useState([]);
+  const [editLanguage, setEditLanguage] = useState("");
+  const [editPublisher, setEditPublisher] = useState("");
+  const [editYear, setEditYear] = useState("");
+  const [editISBN, setEditISBN] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editCover, setEditCover] = useState(null);
+  const [editCoverPreview, setEditCoverPreview] = useState("");
+  const [coverVersion, setCoverVersion] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
 
   const inWishlist = wishlistId !== null && listIds.includes(wishlistId);
 
@@ -126,6 +140,115 @@ const BookPage = ({ user, sync }) => {
     } else {
       go();
     }
+  };
+
+  const forgetProgress = () => {
+    if (forgetBusy || !confirm(t("book.forgetConfirm"))) return;
+    setForgetBusy(true);
+    deleteProgress(bookId)
+      .then(() => {
+        setReadProgress(0);
+        localProgress.clear(bookId);
+      })
+      .catch(() => alert(t("book.forgetFail")))
+      .finally(() => setForgetBusy(false));
+  };
+
+  const openEditor = () => {
+    setEditTitle(data?.bookForm?.Title ?? "");
+    const authors = (data?.authors ?? []).map((a) => ({
+      last: a.LastName ?? "",
+      first: a.FirstName ?? "",
+      middle: a.MiddleName ?? "",
+    }));
+    setEditAuthors(authors.length ? authors : [{ last: "", first: "", middle: "" }]);
+    setEditLanguage(data?.language ?? "");
+    setEditPublisher(data?.publisher ?? "");
+    setEditYear(data?.year ?? "");
+    setEditISBN(data?.isbn ?? "");
+    setEditDescription(
+      data?.annotation ? String(data.annotation).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : ""
+    );
+    setEditCover(null);
+    setEditCoverPreview("");
+    setEditError("");
+    setEditOpen(true);
+  };
+
+  const chooseCover = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setEditError(t("book.edit.coverTooLarge"));
+      event.target.value = "";
+      return;
+    }
+    if (editCoverPreview) URL.revokeObjectURL(editCoverPreview);
+    setEditCover(file);
+    setEditCoverPreview(URL.createObjectURL(file));
+    setEditError("");
+  };
+
+  useEffect(
+    () => () => {
+      if (editCoverPreview) URL.revokeObjectURL(editCoverPreview);
+    },
+    [editCoverPreview]
+  );
+
+  const changeAuthor = (index, field, value) =>
+    setEditAuthors((prev) => prev.map((a, i) => (i === index ? { ...a, [field]: value } : a)));
+
+  const addAuthor = () =>
+    setEditAuthors((prev) => [...prev, { last: "", first: "", middle: "" }]);
+
+  const removeAuthor = (index) =>
+    setEditAuthors((prev) => prev.filter((_, i) => i !== index));
+
+  const saveMetadata = (event) => {
+    event.preventDefault();
+    const title = editTitle.trim();
+    if (!title || editBusy) {
+      if (!title) setEditError(t("book.edit.titleRequired"));
+      return;
+    }
+    setEditBusy(true);
+    setEditError("");
+    const authors = editAuthors.filter((a) => a.last.trim() || a.first.trim() || a.middle.trim());
+    const isEpub = data?.bookForm?.Ext === ".epub";
+    let request;
+    if (isEpub) {
+      const form = new FormData();
+      form.append("title", title);
+      form.append("authors", JSON.stringify(authors));
+      form.append("language", editLanguage);
+      form.append("publisher", editPublisher);
+      form.append("year", editYear);
+      form.append("isbn", editISBN);
+      form.append("description", editDescription);
+      if (editCover) form.append("cover", editCover);
+      request = updateBookEPUB(data.bookForm.BookID, form);
+    } else {
+      request = updateBookMetadata(data.bookForm.BookID, { title, authors });
+    }
+    request
+      .then(() => {
+        setEditOpen(false);
+        setEditCover(null);
+        setEditCoverPreview("");
+        if (isEpub) {
+          setCoverFailed(false);
+          setCoverVersion(String(Date.now()));
+        }
+        return fetchBookForm({ selectedItemID: bookId }).then((res) => {
+          setData(res ?? null);
+          setPolkaRating(res?.polkaRating ?? null);
+          setUserRating(Number(res?.userRating ?? 0));
+          setListIds((res?.bookListIds ?? []).map(Number));
+        });
+      })
+      .catch(() => setEditError(t("book.edit.fail")))
+      .finally(() => setEditBusy(false));
   };
 
   const submitRating = (value) => {
@@ -272,6 +395,11 @@ const BookPage = ({ user, sync }) => {
   const { bookForm, annotation, publisher, city, year, isbn } = data;
   const { BookID, Title, LibRate, BookSize, Genres, Ext, FileName } = bookForm;
 
+  const canRead = [".fb2", ".txt", ".pdf", ".epub"].includes(Ext);
+  const canCompact = [".fb2", ".epub"].includes(Ext);
+  const isEpub = Ext === ".epub";
+  const compactLabel = Ext === ".epub" ? t("book.downloadText") : t("book.downloadCompact", { ext: Ext });
+
   const initials = (Title || "").trim().slice(0, 2).toUpperCase();
 
   const SOURCE_LABELS = {
@@ -305,7 +433,7 @@ const BookPage = ({ user, sync }) => {
             </div>
           ) : (
             <img
-              src={api.coverUrl(BookID)}
+              src={api.coverUrl(BookID, coverVersion)}
               alt={Title}
               onError={() => setCoverFailed(true)}
             />
@@ -426,62 +554,90 @@ const BookPage = ({ user, sync }) => {
           )}
 
           <div className="book-page__actions">
-            {[".fb2", ".txt", ".pdf", ".epub"].includes(Ext) && (
-              <Link className="btn btn-primary" to={`/read/${BookID}`}>
-                {readProgress > 0
-                  ? t("book.continue", { p: Math.round(readProgress * 100) })
-                  : t("book.read")}
-              </Link>
-            )}
-            <a className={`btn ${Ext === ".fb2" || Ext === ".pdf" ? "btn-ghost" : "btn-primary"}`} href={api.fb2Url(BookID)}>
-              {t("book.download", { ext: Ext || ".fb2" })}
-            </a>
-            {smtpReady && (
+            <div className="book-page__actions-row">
+              {canRead && (
+                <Link className="btn btn-primary" to={`/read/${BookID}`}>
+                  {readProgress > 0
+                    ? t("book.continue", { p: Math.round(readProgress * 100) })
+                    : t("book.read")}
+                </Link>
+              )}
+              <a className="btn btn-ghost" href={api.fb2Url(BookID)}>
+                {t("book.download", { ext: Ext || ".fb2" })}
+              </a>
+              <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
+                {t("book.downloadZip")}
+              </a>
+              {canCompact && (
+                <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>
+                  {compactLabel}
+                </a>
+              )}
+            </div>
+
+            <div className="book-page__actions-row">
               <button
                 type="button"
-                className="btn btn-ghost"
-                onClick={sendToReader}
-                disabled={sendState === "sending"}
-                title={t("book.send.hint")}
+                className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
+                onClick={flipWishlist}
+                disabled={wishBusy}
+                title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}
               >
-                {sendState === "sent"
-                  ? t("book.send.done")
-                  : sendState === "sending"
-                    ? t("book.send.sending")
-                    : t("book.send")}
+                {inWishlist ? t("book.wished") : t("book.wish")}
               </button>
-            )}
-            <button
-              type="button"
-              className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
-              onClick={flipWishlist}
-              disabled={wishBusy}
-              title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}
-            >
-              {inWishlist ? t("book.wished") : t("book.wish")}
-            </button>
-            {sync && (
-              <button
-                type="button"
-                className={`btn btn-ghost book-page__wish ${isOffline ? "is-on" : ""}`}
-                onClick={toggleOffline}
-                disabled={offlineBusy}
-                title={isOffline ? t("book.offline.remove") : t("book.offline.add")}
-              >
-                {offlineBusy ? "…" : isOffline ? t("book.offline.on") : t("book.offline")}
-              </button>
-            )}
-            <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
-            <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
-              {t("book.downloadZip")}
-            </a>
-            <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>
-              {t("book.downloadCompact", { ext: Ext || ".fb2" })}
-            </a>
-            {user?.role === "admin" && (
-              <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
-                {t("book.delete")}
-              </button>
+              <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
+              {smtpReady && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={sendToReader}
+                  disabled={sendState === "sending"}
+                  title={t("book.send.hint")}
+                >
+                  {sendState === "sent"
+                    ? t("book.send.done")
+                    : sendState === "sending"
+                      ? t("book.send.sending")
+                      : t("book.send")}
+                </button>
+              )}
+              {sync && (
+                <button
+                  type="button"
+                  className={`btn btn-ghost book-page__wish ${isOffline ? "is-on" : ""}`}
+                  onClick={toggleOffline}
+                  disabled={offlineBusy}
+                  title={isOffline ? t("book.offline.remove") : t("book.offline.add")}
+                >
+                  {offlineBusy ? "…" : isOffline ? t("book.offline.on") : t("book.offline")}
+                </button>
+              )}
+            </div>
+
+            {(readProgress > 0 || user?.role === "admin") && (
+              <div className="book-page__actions-row book-page__actions-row--tools">
+                {readProgress > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost book-page__forget"
+                    onClick={forgetProgress}
+                    disabled={forgetBusy}
+                    title={t("book.forgetHint")}
+                  >
+                    {t("book.forget")}
+                  </button>
+                )}
+                {user?.role === "admin" && (
+                  <>
+                    <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
+                      {t("book.edit")}
+                    </button>
+                    <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
+                      {t("book.delete")}
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
 
@@ -556,6 +712,142 @@ const BookPage = ({ user, sync }) => {
             </div>
           )}
         </section>
+      )}
+
+      {editOpen && (
+        <div className="book-page__modal" role="dialog" aria-modal="true" aria-label={t("book.edit")}>
+          <form className="book-page__modal-card" onSubmit={saveMetadata}>
+            <h2>{t("book.edit")}</h2>
+            <label className="book-page__modal-field">
+              <span>{t("book.edit.title")}</span>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                maxLength={512}
+                autoFocus
+              />
+            </label>
+            {isEpub && (
+              <>
+                <div className="book-page__modal-grid">
+                  <label className="book-page__modal-field">
+                    <span>{t("book.edit.language")}</span>
+                    <input
+                      type="text"
+                      value={editLanguage}
+                      onChange={(e) => setEditLanguage(e.target.value)}
+                      maxLength={32}
+                    />
+                  </label>
+                  <label className="book-page__modal-field">
+                    <span>{t("book.edit.year")}</span>
+                    <input
+                      type="text"
+                      value={editYear}
+                      onChange={(e) => setEditYear(e.target.value)}
+                      maxLength={32}
+                    />
+                  </label>
+                </div>
+                <div className="book-page__modal-grid">
+                  <label className="book-page__modal-field">
+                    <span>{t("book.edit.publisher")}</span>
+                    <input
+                      type="text"
+                      value={editPublisher}
+                      onChange={(e) => setEditPublisher(e.target.value)}
+                      maxLength={256}
+                    />
+                  </label>
+                  <label className="book-page__modal-field">
+                    <span>{t("book.edit.isbn")}</span>
+                    <input
+                      type="text"
+                      value={editISBN}
+                      onChange={(e) => setEditISBN(e.target.value)}
+                      maxLength={32}
+                    />
+                  </label>
+                </div>
+                <label className="book-page__modal-field">
+                  <span>{t("book.edit.description")}</span>
+                  <textarea
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    rows={4}
+                    maxLength={4096}
+                  />
+                </label>
+                <div className="book-page__cover-edit">
+                  <div>
+                    <span className="book-page__modal-label">{t("book.edit.cover")}</span>
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseCover} />
+                    <p className="book-page__modal-hint">{t("book.edit.coverHint")}</p>
+                  </div>
+                  <img
+                    className="book-page__cover-preview"
+                    src={editCoverPreview || api.coverUrl(BookID, coverVersion)}
+                    alt=""
+                  />
+                </div>
+              </>
+            )}
+            <div className="book-page__modal-authors">
+              <span>{t("book.edit.authors")}</span>
+              {editAuthors.map((a, i) => (
+                <div className="book-page__author-row" key={i}>
+                  <input
+                    type="text"
+                    placeholder={t("book.edit.last")}
+                    value={a.last}
+                    onChange={(e) => changeAuthor(i, "last", e.target.value)}
+                    maxLength={128}
+                  />
+                  <input
+                    type="text"
+                    placeholder={t("book.edit.first")}
+                    value={a.first}
+                    onChange={(e) => changeAuthor(i, "first", e.target.value)}
+                    maxLength={128}
+                  />
+                  <input
+                    type="text"
+                    placeholder={t("book.edit.middle")}
+                    value={a.middle}
+                    onChange={(e) => changeAuthor(i, "middle", e.target.value)}
+                    maxLength={128}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-link book-page__author-remove"
+                    onClick={() => removeAuthor(i)}
+                    aria-label={t("book.edit.removeAuthor")}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn btn-link" onClick={addAuthor}>
+                + {t("book.edit.addAuthor")}
+              </button>
+            </div>
+            {editError && <div className="book-page__error">{editError}</div>}
+            <div className="book-page__modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setEditOpen(false)}
+                disabled={editBusy}
+              >
+                {t("book.edit.cancel")}
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={editBusy}>
+                {t("book.edit.save")}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

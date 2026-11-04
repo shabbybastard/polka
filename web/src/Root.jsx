@@ -110,7 +110,7 @@ const Root = () => {
         <Route
           path="/admin/library"
           element={
-            user?.role === "admin" ? layout(<AdminLibraryPage />) : <Navigate to="/" replace />
+            user?.role === "admin" ? layout(<AdminLibraryPage onConfigChange={loadConfig} />) : <Navigate to="/" replace />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

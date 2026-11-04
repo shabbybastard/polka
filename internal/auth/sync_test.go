@@ -82,6 +82,53 @@ func TestSyncStateMergeLWW(t *testing.T) {
 	}
 }
 
+func TestDeleteProgressTombstone(t *testing.T) {
+	s := newService(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "owner", "pass1234", "", RoleAdmin)
+
+	if err := s.SaveProgress(ctx, u.ID, 42, Progress{Chapter: 3, Overall: 0.4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteProgress(ctx, u.ID, 42); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetProgress(ctx, u.ID, 42); err == nil {
+		t.Fatal("deleted progress must not be returned")
+	}
+	if list, _ := s.ListProgress(ctx, u.ID, 10); len(list) != 0 {
+		t.Errorf("deleted progress is still on the reading shelf: %+v", list)
+	}
+
+	state, err := s.ExportState(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Progress) != 1 || !state.Progress[0].Deleted {
+		t.Fatalf("export must contain the tombstone: %+v", state.Progress)
+	}
+
+	// An older snapshot from another device cannot resurrect the position.
+	old := &SyncState{Progress: []ProgressState{{
+		BookID: 42, Chapter: 1, Overall: 0.1, UpdatedAt: "2000-01-01 00:00:00",
+	}}}
+	if err := s.MergeState(ctx, u.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetProgress(ctx, u.ID, 42); err == nil {
+		t.Error("old live progress overwrote the tombstone")
+	}
+
+	// A genuinely newer position does restore reading, as it should.
+	time.Sleep(5 * time.Millisecond)
+	if err := s.SaveProgress(ctx, u.ID, 42, Progress{Chapter: 4, Overall: 0.5}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.GetProgress(ctx, u.ID, 42); err != nil || p.Chapter != 4 {
+		t.Errorf("new progress after delete = %+v, %v", p, err)
+	}
+}
+
 // Two writes within the same second must still be ordered: the merge is
 // last-write-wins on updated_at, so timestamps need sub-second precision.
 func TestSyncStateSubSecondOrdering(t *testing.T) {

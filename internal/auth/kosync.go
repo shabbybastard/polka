@@ -100,10 +100,28 @@ func (s *Service) KosyncGet(ctx context.Context, userID int64, document string) 
 // chapter, position and locator of an existing record are preserved.
 func (s *Service) SaveOverall(ctx context.Context, userID, bookID int64, overall float64) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, updated_at)
-		VALUES (?, ?, 0, 0, ?, '', strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, deleted, updated_at)
+		VALUES (?, ?, 0, 0, ?, '', 0, strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		ON CONFLICT (user_id, book_id) DO UPDATE
-		SET overall = excluded.overall, updated_at = excluded.updated_at`,
+		SET overall = excluded.overall, deleted = 0, updated_at = excluded.updated_at`,
 		userID, bookID, overall)
+	return err
+}
+
+// DeleteKosyncByDocuments removes device positions for the given digests
+// (a book may have several). KOReader itself keeps its local position and
+// may upload it again later — that is device behaviour we cannot undo.
+func (s *Service) DeleteKosyncByDocuments(ctx context.Context, userID int64, documents []string) error {
+	if len(documents) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(documents)), ",")
+	args := make([]any, 0, len(documents)+1)
+	args = append(args, userID)
+	for _, d := range documents {
+		args = append(args, d)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM kosync_progress WHERE user_id = ? AND document IN (`+placeholders+`)`, args...)
 	return err
 }

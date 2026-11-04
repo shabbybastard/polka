@@ -63,6 +63,16 @@ describe("HomePage", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/lists");
   });
 
+  it("hides the hero banner when the admin turned it off", async () => {
+    fetchHomeShelves.mockResolvedValue({
+      shelves: [{ id: "newest", books: [{ BookID: 1, Title: "Новинка" }], hasMore: false }],
+    });
+    renderHome({ numberOfBooks: 10, homeHero: false });
+    expect(await screen.findByText("Новинка")).toBeInTheDocument();
+    expect(screen.queryByText(t("home.eyebrow"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+  });
+
   it("shows the empty state", async () => {
     fetchHomeShelves.mockResolvedValue({ shelves: [] });
     renderHome({});

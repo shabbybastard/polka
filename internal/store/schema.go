@@ -1,7 +1,46 @@
 package store
 
 // The schema version is stored in PRAGMA user_version.
-const schemaVersion = 4
+const schemaVersion = 6
+
+// v6: external tag sources now contribute to the existing genre catalog
+// instead of a separate tags table. The migration below folds the old
+// tags/book_tags rows into genres/book_genres and drops the old tables.
+const schemaV6 = `
+ALTER TABLE genres ADD COLUMN source TEXT NOT NULL DEFAULT '';
+
+INSERT OR IGNORE INTO genres (code, name, source)
+	SELECT 'ext_' || source || '_' || id, name, source FROM tags;
+
+INSERT OR IGNORE INTO book_genres (book_id, genre_id)
+	SELECT bt.book_id, g.id
+	FROM book_tags bt
+	JOIN tags t ON t.id = bt.tag_id
+	JOIN genres g ON g.code = 'ext_' || t.source || '_' || t.id;
+
+DROP TABLE book_tags;
+DROP TABLE tags;
+CREATE INDEX IF NOT EXISTS idx_genres_source ON genres (source);
+`
+
+// v5: external tags (LiveLib genres, Open Library subjects) persisted in a
+// separate table. Kept only as a migration step to v6.
+const schemaV5 = `
+CREATE TABLE IF NOT EXISTS tags (
+	id     INTEGER PRIMARY KEY,
+	name   TEXT NOT NULL,
+	source TEXT NOT NULL DEFAULT '',
+	UNIQUE (name, source)
+);
+
+CREATE TABLE IF NOT EXISTS book_tags (
+	book_id INTEGER NOT NULL,
+	tag_id  INTEGER NOT NULL,
+	PRIMARY KEY (book_id, tag_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_book_tags_tag ON book_tags (tag_id, book_id);
+`
 
 // v4: KOReader partial-MD5 digests of served book files — the bridge
 // between kosync documents and catalog books. Recomputed lazily (on
@@ -54,9 +93,10 @@ CREATE TABLE authors (
 );
 
 CREATE TABLE genres (
-	id   INTEGER PRIMARY KEY,
-	code TEXT NOT NULL UNIQUE,
-	name TEXT NOT NULL DEFAULT ''
+	id     INTEGER PRIMARY KEY,
+	code   TEXT NOT NULL UNIQUE,
+	name   TEXT NOT NULL DEFAULT '',
+	source TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE keywords (
@@ -138,6 +178,7 @@ var schemaIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors (author_id, book_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_book_genres_genre ON book_genres (genre_id, book_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_book_keywords_keyword ON book_keywords (keyword_id, book_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_genres_source ON genres (source)`,
 	`CREATE INDEX IF NOT EXISTS idx_authors_name ON authors (last_name, first_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_books_file_hash ON books (file_hash) WHERE file_hash != ''`,
 	`CREATE INDEX IF NOT EXISTS idx_books_content_hash ON books (content_hash) WHERE content_hash != ''`,

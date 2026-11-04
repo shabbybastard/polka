@@ -28,6 +28,13 @@ type genreEntry struct {
 
 const genreCacheTTL = 5 * time.Minute
 
+func (s *Server) invalidateGenreCache() {
+	s.genres.mu.Lock()
+	s.genres.counts = nil
+	s.genres.fetched = time.Time{}
+	s.genres.mu.Unlock()
+}
+
 func (s *Server) genreList(r *http.Request) []genreEntry {
 	lang := reqLang(r)
 	s.genres.mu.Lock()
@@ -38,10 +45,19 @@ func (s *Server) genreList(r *http.Request) []genreEntry {
 			s.genres.fetched = time.Now()
 		}
 	}
-	// Only counters are cached; names are localized on the fly.
+	// Only counters are cached; names are localized (or taken from the
+	// external source) on the fly.
+	enabled := s.enabledTagSources(r.Context())
 	list := make([]genreEntry, 0, len(s.genres.counts))
 	for _, g := range s.genres.counts {
-		list = append(list, genreEntry{Code: g.Code, Name: genres.NameLang(g.Code, lang), Books: g.Books})
+		if g.Source != "" && !enabled[g.Source] {
+			continue
+		}
+		name := g.Name
+		if name == "" {
+			name = genres.NameLang(g.Code, lang)
+		}
+		list = append(list, genreEntry{Code: g.Code, Name: name, Books: g.Books})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Books > list[j].Books })
 	return list

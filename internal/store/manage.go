@@ -134,6 +134,107 @@ func (s *Store) AddBook(ctx context.Context, b *BookInput) (int64, error) {
 	return bookID, tx.Commit()
 }
 
+// UpdateBookMetadata changes a book's title and author list. Authors are
+// matched by their normalized (last, first, middle) triple, so renaming a
+// book to an existing author links it to that author's page. The FTS
+// indexes are rebuilt in the same transaction.
+func (s *Store) UpdateBookMetadata(ctx context.Context, bookID int64, title string, authors []AuthorName) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New("title must not be empty")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `UPDATE books SET title = ? WHERE id = ? AND deleted = 0`, title, bookID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_authors WHERE book_id = ?`, bookID); err != nil {
+		return err
+	}
+
+	for _, a := range authors {
+		a.Last = strings.TrimSpace(a.Last)
+		a.First = strings.TrimSpace(a.First)
+		a.Middle = strings.TrimSpace(a.Middle)
+		if a.Last == "" && a.First == "" && a.Middle == "" {
+			continue
+		}
+		name := strings.TrimSpace(a.Last + " " + a.First + " " + a.Middle)
+		id, err := lookupOrInsert(ctx, tx,
+			`SELECT id FROM authors WHERE last_name = ? AND first_name = ? AND middle_name = ?`,
+			`INSERT INTO authors (last_name, first_name, middle_name) VALUES (?, ?, ?)`,
+			func(id int64) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO authors_search (rowid, name) VALUES (?, ?)`, id, name)
+				return err
+			}, a.Last, a.First, a.Middle)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO book_authors (book_id, author_id) VALUES (?, ?)`, bookID, id); err != nil {
+			return err
+		}
+	}
+
+	// Keep the book_search row in sync with the new title/author names.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_search WHERE rowid = ?`, bookID); err != nil {
+		return err
+	}
+	searchAuthors := make([]string, 0, len(authors))
+	for _, a := range authors {
+		a.Last = strings.TrimSpace(a.Last)
+		a.First = strings.TrimSpace(a.First)
+		if a.Last == "" && a.First == "" {
+			continue
+		}
+		searchAuthors = append(searchAuthors, strings.TrimSpace(a.Last+" "+a.First))
+	}
+	var seriesTitle string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT coalesce(s.title, '') FROM books b
+		LEFT JOIN series s ON s.id = b.series_id WHERE b.id = ?`, bookID).Scan(&seriesTitle); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO book_search (rowid, title, authors, series) VALUES (?, ?, ?, ?)`,
+		bookID, title, strings.Join(searchAuthors, " "), seriesTitle); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// UpdateBookFile refreshes the fields that change when an EPUB is edited.
+func (s *Store) UpdateBookFile(ctx context.Context, bookID int64, lang string, year int, isbn string, size int64, fileHash string) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE books SET lang = ?, year = ?, isbn = ?, size = ?, file_hash = ?
+		WHERE id = ? AND deleted = 0`,
+		lang, year, NormalizeISBN(isbn), size, fileHash, bookID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteBookDigests invalidates KOReader positions tied to the old file.
+func (s *Store) DeleteBookDigests(ctx context.Context, bookID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM book_digests WHERE book_id = ?`, bookID)
+	return err
+}
+
 // SetBookDeleted hides or restores a book, keeping the FTS index in sync.
 func (s *Store) SetBookDeleted(ctx context.Context, bookID int64, deleted bool) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE books SET deleted = ? WHERE id = ?`, boolToInt(deleted), bookID)
@@ -205,6 +306,28 @@ func (s *Store) SetBookDigest(ctx context.Context, digest string, bookID int64) 
 }
 
 // BookIDByDigest maps a KOReader document digest back to a book.
+// BookDigests returns the KOReader document digests served for a book.
+// A book may have several because different downloads (e.g. fb2 and zip
+// variants) have different file hashes.
+func (s *Store) BookDigests(ctx context.Context, bookID int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT digest FROM book_digests WHERE book_id = ?`, bookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var digest string
+		if err := rows.Scan(&digest); err != nil {
+			return nil, err
+		}
+		out = append(out, digest)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) BookIDByDigest(ctx context.Context, digest string) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `SELECT book_id FROM book_digests WHERE digest = ?`, digest).Scan(&id)
@@ -269,6 +392,12 @@ func (s *Store) FindSimilar(ctx context.Context, title string, authorLastNames [
 		}
 	}
 	return similar, nil
+}
+
+// BooksForEnrichment walks live books in id order for background
+// enrichment jobs.
+func (s *Store) BooksForEnrichment(ctx context.Context, afterID int64, limit int) ([]Book, error) {
+	return s.queryBooks(ctx, `b.id > ?`, `b.id`, limit, 0, afterID)
 }
 
 // BooksByIDs returns books in the order of the given ids (missing

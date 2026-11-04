@@ -11,6 +11,7 @@ describe("buildUrl", () => {
   });
   it("derives book asset URLs from the id", () => {
     expect(api.coverUrl(7)).toBe("/Images/covers/7");
+    expect(api.coverUrl(7, "v1")).toBe("/Images/covers/7?v=v1");
     expect(api.fb2Url(7)).toBe("/Images/fb2/7");
     expect(api.zipUrl(7)).toBe("/Images/zip/7");
     expect(api.fb2CompactUrl(7)).toBe("/Images/fb2compact/7");

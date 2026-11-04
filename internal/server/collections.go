@@ -15,12 +15,15 @@ import (
 // and the /shelf/… page work without a separate API.
 const collectionShelfPrefix = "collection_"
 
-func (s *Server) collectionsCount(ctx context.Context) int {
-	if s.cols == nil {
-		return 0
-	}
-	return s.cols.Count(ctx)
-}
+// collectionsCount used to back a collection counter in the UI. It has no
+// callers at the moment; keep it commented out until the counter returns.
+//
+// func (s *Server) collectionsCount(ctx context.Context) int {
+// 	if s.cols == nil {
+// 		return 0
+// 	}
+// 	return s.cols.Count(ctx)
+// }
 
 // rematchCollections recomputes the matching of all collections against
 // the library (after startup and after a catalog import).

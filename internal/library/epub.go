@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"path"
 	"strings"
@@ -11,10 +12,14 @@ import (
 
 // EPUBMeta holds metadata from the EPUB OPF manifest.
 type EPUBMeta struct {
-	Title    string
-	Authors  []string // full names as written in dc:creator
-	Language string
-	Subjects []string
+	Title       string
+	Authors     []string // full names as written in dc:creator
+	Language    string
+	Subjects    []string
+	Publisher   string
+	Year        string
+	Description string
+	ISBN        string
 }
 
 // ParseEPUBFile reads the metadata of an EPUB file on disk.
@@ -24,22 +29,29 @@ func ParseEPUBFile(filePath string) (*EPUBMeta, error) {
 		return nil, fmt.Errorf("open epub: %w", err)
 	}
 	defer zr.Close()
+	return parseEPUBZip(&zr.Reader)
+}
 
-	opfPath, err := epubRootFile(&zr.Reader)
+// ParseEPUB reads EPUB metadata from an in-memory archive.
+func ParseEPUB(r io.ReaderAt, size int64) (*EPUBMeta, error) {
+	zr, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("open epub: %w", err)
+	}
+	return parseEPUBZip(zr)
+}
+
+func parseEPUBZip(zr *zip.Reader) (*EPUBMeta, error) {
+	opfPath, err := epubRootFile(zr)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range zr.File {
-		if strings.EqualFold(f.Name, opfPath) {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, err
-			}
-			defer rc.Close()
-			return parseOPF(rc)
-		}
+	rc, err := openZipFile(zr, opfPath)
+	if err != nil {
+		return nil, fmt.Errorf("epub: %s not found", opfPath)
 	}
-	return nil, fmt.Errorf("epub: %s not found", opfPath)
+	defer rc.Close()
+	return parseOPF(rc)
 }
 
 // epubRootFile extracts the OPF path from META-INF/container.xml.
@@ -73,10 +85,17 @@ func epubRootFile(zr *zip.Reader) (string, error) {
 func parseOPF(r io.Reader) (*EPUBMeta, error) {
 	var opf struct {
 		Metadata struct {
-			Titles    []string `xml:"title"`
-			Creators  []string `xml:"creator"`
-			Languages []string `xml:"language"`
-			Subjects  []string `xml:"subject"`
+			Titles       []string `xml:"title"`
+			Creators     []string `xml:"creator"`
+			Languages    []string `xml:"language"`
+			Subjects     []string `xml:"subject"`
+			Publishers   []string `xml:"publisher"`
+			Dates        []string `xml:"date"`
+			Descriptions []string `xml:"description"`
+			Identifiers  []struct {
+				Value  string `xml:",chardata"`
+				Scheme string `xml:"scheme,attr"`
+			} `xml:"identifier"`
 		} `xml:"metadata"`
 	}
 	dec := xml.NewDecoder(r)
@@ -102,7 +121,49 @@ func parseOPF(r io.Reader) (*EPUBMeta, error) {
 			meta.Subjects = append(meta.Subjects, s)
 		}
 	}
+	if len(opf.Metadata.Publishers) > 0 {
+		meta.Publisher = strings.TrimSpace(opf.Metadata.Publishers[0])
+	}
+	if len(opf.Metadata.Dates) > 0 {
+		meta.Year = strings.TrimSpace(opf.Metadata.Dates[0])
+	}
+	if len(opf.Metadata.Descriptions) > 0 {
+		meta.Description = strings.TrimSpace(opf.Metadata.Descriptions[0])
+	}
+	for _, id := range opf.Metadata.Identifiers {
+		value := strings.TrimSpace(id.Value)
+		if strings.EqualFold(strings.TrimSpace(id.Scheme), "ISBN") || looksLikeISBN(value) {
+			meta.ISBN = value
+			break
+		}
+	}
 	return meta, nil
+}
+
+func descriptionHTML(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var out strings.Builder
+	for _, p := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n\n") {
+		if p = strings.TrimSpace(p); p != "" {
+			out.WriteString("<p>" + html.EscapeString(p) + "</p>")
+		}
+	}
+	return out.String()
+}
+
+func looksLikeISBN(s string) bool {
+	digits := 0
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			digits++
+		} else if r != '-' && r != ' ' && r != 'X' && r != 'x' {
+			return false
+		}
+	}
+	return digits == 10 || digits == 13
 }
 
 // EPUBCover extracts the cover image: an EPUB3 manifest item with
