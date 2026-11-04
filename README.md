@@ -1,4 +1,7 @@
-# Polka 
+# Polka
+
+[![CI](https://img.shields.io/github/actions/workflow/status/shabbybastard/polka/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/shabbybastard/polka/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/shabbybastard/polka?include_prereleases&style=flat-square&label=release)](https://github.com/shabbybastard/polka/releases)
 
 **Your home e-book library — fast, private, and beautiful.**
 
@@ -7,14 +10,6 @@ collection. Point it at a folder of books — or import a huge `.inpx` catalog �
 and get a polished web interface with search, covers, annotations, an online
 reader, reading lists, ratings, recommendations, and an OPDS feed for every
 mobile reading app.
-
-> **This is a fork.** The original project is
-> [vestigiumincaligne/polka](https://github.com/vestigiumincaligne/polka).
-> Fork releases use the version pattern `v<upstream>-fork.<n>`
-> (current: `v0.1.22-fork.3`); upstream changes are merged selectively
-> when they contain features we want. The binary reports the same version
-> without the leading `v`, while deb/rpm packages use `0.1.22+fork.3` so
-> they sort above upstream `0.1.22`.
 
 ![Polka home page — personal shelves with covers, search, and reading progress](docs/screenshot-home.png)
 
@@ -250,11 +245,13 @@ The original Polka was created by its authors and contributors; all credit for
 the upstream project belongs to them. Please support the original project and
 report upstream bugs there.
 
-Fork-specific changes are kept in small, separate commits so upstream features
-can still be merged when they are worth taking. Fork releases are tagged
-`v<upstream>-fork.<n>` (for example `v0.1.22-fork.3`). The current version is
-also stored in [`VERSION`](VERSION) for local `make build`; release tags should
-match it.
+The current fork state is based on upstream v0.1.22. Upstream features will be pulled in
+selectively when they are worth taking.
+
+Fork releases use the version pattern `v<upstream>-fork.<n>`
+(current: `v0.1.22-fork.3`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.3`, and the version for local
+`make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning
 
