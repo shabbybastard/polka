@@ -59,6 +59,9 @@ export const updateBookMetadata = (id, { title, authors }) =>
 export const updateBookEPUB = (id, formData) =>
   postForm(`admin/books/${id}/epub`, formData);
 
+export const forgetBookEnrichment = (id) =>
+  post(`admin/books/${id}/forget-enrichment`);
+
 export const importInpx = ({ file, path, replace } = {}) => {
   const fd = new FormData();
   if (file) fd.append("file", file);

@@ -3,6 +3,7 @@
 package enrich
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +13,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+
+	"golang.org/x/net/html"
 )
 
 const (
@@ -34,6 +37,9 @@ const (
 	throttleDelay  = 2 * time.Second
 	throttleJitter = 750 * time.Millisecond
 	blockedBackoff = time.Hour
+
+	// Bump this when the parser or the cached result shape changes.
+	cacheVersion = 2
 )
 
 // Sources lists all sources in priority order.
@@ -62,7 +68,8 @@ type cacheEntry struct {
 	FetchedAt time.Time   `json:"fetchedAt"`
 	// TagKey lists the tag sources used for this entry. Changing the
 	// administrator's per-source toggles invalidates the cached tags.
-	TagKey string `json:"tagKey,omitempty"`
+	TagKey  string `json:"tagKey,omitempty"`
+	Version int    `json:"version,omitempty"`
 }
 
 type Provider struct {
@@ -143,6 +150,25 @@ func (p *Provider) GetThrottled(ctx context.Context, key, title, author string, 
 	return p.getEnrichment(ctx, key, title, author, enabled, tagSources, true)
 }
 
+// ForgetBook drops cached enrichment and similar-books data for one book.
+// The next page load queries the sources again.
+func (p *Provider) ForgetBook(bookID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.cache[bookID]; ok {
+		delete(p.cache, bookID)
+		p.persistCache()
+	}
+	if p.similar == nil {
+		p.loadSimilarCache()
+	}
+	if _, ok := p.similar["sim:"+bookID]; ok {
+		delete(p.similar, "sim:"+bookID)
+		p.persistSimilarCache()
+	}
+}
+
 func (p *Provider) getEnrichment(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool, throttle bool) *Enrichment {
 	tagKey := tagSourcesKey(tagSources)
 	p.mu.Lock()
@@ -151,7 +177,7 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 		if e.Result.Negative {
 			ttl = negativeTTL
 		}
-		if time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
+		if e.Version == cacheVersion && time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
 			p.mu.Unlock()
 			if tagKey == "" && len(e.Result.Tags) > 0 {
 				// Do not leak tags through a cache entry when the
@@ -221,7 +247,7 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 	}
 
 	p.mu.Lock()
-	p.cache[key] = cacheEntry{Result: res, FetchedAt: time.Now(), TagKey: tagKey}
+	p.cache[key] = cacheEntry{Result: res, FetchedAt: time.Now(), TagKey: tagKey, Version: cacheVersion}
 	p.persistCache()
 	p.mu.Unlock()
 	return res
@@ -315,14 +341,22 @@ func (p *Provider) get(ctx context.Context, rawURL string, browser bool) ([]byte
 
 // --- LiveLib: search page parsing ---
 
-var (
-	livelibRe       = regexp.MustCompile(`(?s)href="(/book/\d+[^"]*)".*?itemprop="ratingValue">([\d.,]+)`)
-	livelibGenreRe  = regexp.MustCompile(`"genre"\s*:\s*\[((?:"[^"]*"\s*,?\s*)*)\]`)
-	livelibGenreVal = regexp.MustCompile(`"([^"]+)"`)
-)
+// livelibHit is one book card from a LiveLib search result. The result page
+// already contains the author, rating and genres, so there is no reason to
+// open the book page with a second request.
+type livelibHit struct {
+	InfoURL string
+	Title   string
+	Authors []string
+	Rating  float64
+	Tags    []string
+}
 
 func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, includeTags, throttle bool) (*Result, error) {
 	q := strings.TrimSpace(title)
+	if first := firstAuthor(author); first != "" {
+		q += " " + first
+	}
 	if throttle {
 		p.throttle(ctx, SourceLiveLib)
 	}
@@ -330,44 +364,255 @@ func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, inclu
 	if err != nil {
 		return nil, err
 	}
-	m := livelibRe.FindSubmatch(body)
-	if m == nil {
-		return nil, nil // page fetched, no book found
-	}
-	rating, err := strconv.ParseFloat(strings.ReplaceAll(string(m[2]), ",", "."), 64)
-	if err != nil || rating <= 0 {
-		return nil, nil
+	hit := bestLiveLibHit(parseLiveLibSearch(body), title, author)
+	if hit == nil {
+		return nil, nil // page fetched, but no confident match
 	}
 	res := &Result{
 		Source:  SourceLiveLib,
-		Rating:  rating,
-		InfoURL: p.LiveLibBase + string(m[1]),
+		Rating:  hit.Rating,
+		InfoURL: p.LiveLibBase + hit.InfoURL,
 	}
 	if includeTags {
-		// The search result only has the rating; genres live on the book
-		// page in its JSON-LD. A failure here must not discard the rating.
-		if throttle {
-			p.throttle(ctx, SourceLiveLib)
-		}
-		if page, err := p.get(ctx, res.InfoURL, true); err == nil {
-			res.Tags = livelibTags(page)
-		}
+		res.Tags = hit.Tags
+	}
+	if res.Rating <= 0 && len(res.Tags) == 0 {
+		return nil, nil
 	}
 	return res, nil
 }
 
-func livelibTags(page []byte) []string {
-	m := livelibGenreRe.FindSubmatch(page)
-	if m == nil {
+// firstAuthor keeps the LiveLib query focused on the first author. The store
+// joins multiple authors with ", "; searching for all of them at once usually
+// returns nothing.
+func firstAuthor(authors string) string {
+	if i := strings.IndexRune(authors, ','); i >= 0 {
+		authors = authors[:i]
+	}
+	return strings.TrimSpace(authors)
+}
+
+func parseLiveLibSearch(body []byte) []livelibHit {
+	doc, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
 		return nil
 	}
+	var hits []livelibHit
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "div" && hasClass(n, "object-wrapper") {
+			if hit, ok := parseLiveLibHit(n); ok {
+				hits = append(hits, hit)
+			}
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return hits
+}
+
+func parseLiveLibHit(block *html.Node) (livelibHit, bool) {
+	var hit livelibHit
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch {
+			case n.Data == "a" && hasClass(n, "title") && hit.Title == "":
+				hit.Title = nodeText(n)
+				if href := attr(n, "href"); strings.HasPrefix(href, "/book/") {
+					hit.InfoURL = href
+				}
+			case n.Data == "a" && hasClass(n, "description"):
+				name := strings.TrimSpace(attr(n, "title"))
+				if name == "" {
+					name = nodeText(n)
+				}
+				if name != "" {
+					hit.Authors = append(hit.Authors, name)
+				}
+			case n.Data == "a" && hasClass(n, "label-genre"):
+				if tag := nodeText(n); tag != "" {
+					hit.Tags = append(hit.Tags, tag)
+				}
+			case n.Data == "span" && attr(n, "itemprop") == "ratingValue" && hit.Rating == 0:
+				raw := strings.ReplaceAll(nodeText(n), ",", ".")
+				if v, err := strconv.ParseFloat(raw, 64); err == nil {
+					hit.Rating = v
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(block)
+	if hit.Title == "" || hit.InfoURL == "" {
+		return hit, false
+	}
+	return hit, true
+}
+
+// bestLiveLibHit prefers an exact title and matching author. It never falls
+// back to "the first result": a wrong rating and someone else's genres are
+// worse than no enrichment at all.
+func bestLiveLibHit(hits []livelibHit, title, author string) *livelibHit {
+	bestScore := 0
+	var best *livelibHit
+	for i := range hits {
+		h := &hits[i]
+		score := 0
+		if normalizeName(h.Title) == normalizeName(title) {
+			score += 4
+		} else if titlesMatch(title, h.Title) {
+			score += 2
+		} else {
+			continue
+		}
+		if author != "" {
+			switch {
+			case len(h.Authors) == 0:
+				// A card without an author is only trustworthy when its
+				// title is exactly the requested one.
+				if score < 4 {
+					continue
+				}
+			case authorsMatch(author, h.Authors):
+				score += 3
+			default:
+				continue
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			best = h
+		}
+	}
+	return best
+}
+
+func titlesMatch(query, candidate string) bool {
+	q := strings.Fields(normalizeName(query))
+	c := strings.Fields(normalizeName(candidate))
+	if len(q) == 0 || len(c) < len(q) {
+		return false
+	}
+	// Every query word must appear in the candidate and keep its order.
+	// Edition suffixes ("том 1", "иллюстрации") are tolerated; a different
+	// book that only shares the first word is not.
+	pos, extra := 0, 0
+	for _, token := range c {
+		if pos < len(q) && token == q[pos] {
+			pos++
+		} else {
+			extra++
+		}
+	}
+	if pos != len(q) {
+		return false
+	}
+	if len(q) == 1 {
+		return extra == 0
+	}
+	return extra <= 2
+}
+
+func authorsMatch(query string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if authorNameMatches(query, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func authorNameMatches(a, b string) bool {
+	at := significantTokens(a)
+	bt := significantTokens(b)
+	if len(at) == 0 || len(bt) == 0 {
+		return false
+	}
+	set := make(map[string]bool, len(bt))
+	for _, token := range bt {
+		set[token] = true
+	}
+	common := 0
+	for _, token := range at {
+		if set[token] {
+			common++
+		}
+	}
+	// Require at least two matching name parts, or the only part when the
+	// query has just a surname. Initials are ignored by significantTokens.
+	need := len(at)
+	if len(bt) < need {
+		need = len(bt)
+	}
+	if need > 2 {
+		need = 2
+	}
+	return common >= need
+}
+
+func significantTokens(s string) []string {
 	var out []string
-	for _, q := range livelibGenreVal.FindAllSubmatch(m[1], -1) {
-		if tag := strings.TrimSpace(string(q[1])); tag != "" {
-			out = append(out, tag)
+	for _, token := range strings.Fields(normalizeName(s)) {
+		if len([]rune(token)) >= 2 {
+			out = append(out, token)
 		}
 	}
 	return out
+}
+
+// normalizeName lowercases a name, unifies ё and drops punctuation so that
+// "Мастер и Маргарита" and "Мастер и Маргарита (иллюстрации)" compare well.
+func normalizeName(s string) string {
+	s = strings.ToLower(strings.ReplaceAll(s, "ё", "е"))
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+			b.WriteByte(' ')
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func hasClass(n *html.Node, class string) bool {
+	for _, token := range strings.Fields(attr(n, "class")) {
+		if token == class {
+			return true
+		}
+	}
+	return false
+}
+
+func attr(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
 }
 
 // --- Google Books ---

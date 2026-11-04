@@ -204,6 +204,7 @@ func TestRouteAccess(t *testing.T) {
 		{"POST", "/admin/books/" + id + "/restore", ""},
 		{"POST", "/admin/books/" + id + "/metadata", `{"title":"x"}`},
 		{"POST", "/admin/books/" + id + "/epub", ""},
+		{"POST", "/admin/books/" + id + "/forget-enrichment", ""},
 		{"POST", "/admin/books/upload", ""},
 		{"POST", "/admin/collections/import", ""},
 		{"POST", "/admin/collections/nope/delete", ""},

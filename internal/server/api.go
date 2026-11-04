@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -160,7 +161,11 @@ func (s *Server) readingShelf(r *http.Request, userID int64, limit int) []map[st
 }
 
 func (s *Server) handleGetCatalogShelves(w http.ResponseWriter, r *http.Request) {
-	count := intParam(r, "count", 6)
+	// count is absent or zero on the catalog page: show every genre shelf.
+	count := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("count")); err == nil && v > 0 {
+		count = v
+	}
 	limit := intParam(r, "limit", 12)
 	shelves, err := s.st.CatalogShelves(r.Context(), count, limit)
 	if err != nil {
@@ -176,6 +181,15 @@ func (s *Server) handleGetCatalogShelves(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	// Store sorts by the raw genre name; the API may localize it, so sort
+	// the displayed titles again to keep the catalog stable.
+	sort.SliceStable(shelves, func(i, j int) bool {
+		a, b := strings.ToLower(shelves[i].Title), strings.ToLower(shelves[j].Title)
+		if a != b {
+			return a < b
+		}
+		return shelves[i].ID < shelves[j].ID
+	})
 	writeJSON(w, map[string]any{"shelves": shelvesJSON(shelves)})
 }
 

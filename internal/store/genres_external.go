@@ -86,8 +86,33 @@ func (s *Store) SaveBookGenres(ctx context.Context, bookID int64, source string,
 	return tx.Commit()
 }
 
+// DeleteBookExternalGenres removes every external genre link from one book
+// and drops external genre rows that are no longer used by any book. Native
+// genres are left untouched. It returns the number of removed links.
+func (s *Store) DeleteBookExternalGenres(ctx context.Context, bookID int64) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM book_genres
+		WHERE book_id = ? AND genre_id IN (SELECT id FROM genres WHERE source != '')`, bookID)
+	if err != nil {
+		return 0, err
+	}
+	removed, _ := res.RowsAffected()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM genres
+		WHERE source != '' AND id NOT IN (SELECT genre_id FROM book_genres)`); err != nil {
+		return 0, err
+	}
+	return removed, tx.Commit()
+}
+
 // DeleteBookGenresBySource removes every genre contributed by one external
-// source, including its book links. Native genres have source = ”.
+// source, including its book links. Native genres have source = "".
 func (s *Store) DeleteBookGenresBySource(ctx context.Context, source string) error {
 	source = strings.TrimSpace(source)
 	if source == "" {

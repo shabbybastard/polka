@@ -2,21 +2,60 @@ package enrich
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 const livelibHTML = `<html><body>
-<a href="/book/1017090091-master-i-margarita"><img/></a>
-<div class="rating-book marg-right"><span class="rating-value stars-color-orange" itemprop="ratingValue">4,5</span></div>
+<div class="object-wrapper-outer">
+  <div class="object-wrapper object-edition ll-redirect" data-link="/book/1017090091-master-i-margarita">
+    <a href="/book/1017090091-master-i-margarita" title="Михаил Булгаков - Мастер и Маргарита"><img/></a>
+    <div class="object-info">
+      <div class="brow-title"><a href="/book/1017090091-master-i-margarita" class="title">Мастер и Маргарита</a></div>
+      <a class="description" href="/author/1" title="Михаил Булгаков">Михаил Булгаков</a>
+      <div class="brow-genres">
+        <a class="label-genre" href="/genre/1">Классическая проза</a>
+        <a class="label-genre" href="/genre/2">Роман</a>
+        <a class="label-genre" href="/genre/3">Русская литература</a>
+      </div>
+      <div class="brow-stats-outer"><span class="rating-book marg-right"><span class="rating-value stars-color-orange" itemprop="ratingValue">4,5</span></span></div>
+    </div>
+  </div>
+</div>
 </body></html>`
 
-const livelibBookHTML = `<html><head><script type="application/ld+json">
-{"@type":"Book","genre":["Классическая проза","Роман","Русская литература"]}
-</script></head></html>`
+// livelibWrongFirstHTML reproduces the bug where the first search result is
+// a different book that merely starts with the same word.
+const livelibWrongFirstHTML = `<html><body>
+<div class="object-wrapper-outer">
+  <div class="object-wrapper object-edition" data-link="/book/1000000001-vot-kakoy-rasseyannyy">
+    <div class="object-info">
+      <div class="brow-title"><a href="/book/1000000001-vot-kakoy-rasseyannyy" class="title">Вот какой рассеянный</a></div>
+      <a class="description" href="/author/2" title="Самуил Маршак">Самуил Маршак</a>
+      <div class="brow-genres"><a class="label-genre" href="/genre/4">Детская литература</a></div>
+      <span class="rating-value" itemprop="ratingValue">4.7</span>
+    </div>
+  </div>
+</div>
+<div class="object-wrapper-outer">
+  <div class="object-wrapper object-edition" data-link="/book/1007412814-vot-ya-dzhonatan-safran-foer">
+    <div class="object-info">
+      <div class="brow-title"><a href="/book/1007412814-vot-ya-dzhonatan-safran-foer" class="title">Вот я</a></div>
+      <a class="description" href="/author/3" title="Джонатан Сафран Фоер">Джонатан Сафран Фоер</a>
+      <div class="brow-genres">
+        <a class="label-genre" href="/genre/5">Современная проза</a>
+        <a class="label-genre" href="/genre/6">Современная зарубежная литература</a>
+      </div>
+      <span class="rating-value" itemprop="ratingValue">3.9</span>
+    </div>
+  </div>
+</div>
+</body></html>`
 
 const googleJSON = `{"items":[
   {"volumeInfo":{"title":"Без рейтинга"}},
@@ -41,13 +80,9 @@ func newTestProvider(t *testing.T, livelibOK, googleOK, openlibOK bool) *Provide
 			w.Write([]byte(body))
 		}
 	}
-	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !livelibOK {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/book/") {
-			w.Write([]byte(livelibBookHTML))
 			return
 		}
 		w.Write([]byte(livelibHTML))
@@ -138,12 +173,12 @@ func TestTagsWorkWhenRatingSourceDisabled(t *testing.T) {
 	}
 }
 
-func TestTagsDisabledSkipsBookPage(t *testing.T) {
+func TestLiveLibTagsComeFromSearchPage(t *testing.T) {
 	var searchHits, bookHits int
 	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/book/") {
 			bookHits++
-			w.Write([]byte(livelibBookHTML))
+			w.Write([]byte("<html></html>"))
 			return
 		}
 		searchHits++
@@ -163,13 +198,66 @@ func TestTagsDisabledSkipsBookPage(t *testing.T) {
 		t.Errorf("tags off result: %v", res.Tags)
 	}
 
-	// Enabling tags must ignore the tag-less cache entry and fetch the page.
+	// Enabling tags ignores the tag-less cache entry but still only needs
+	// the search page.
 	res = p.Get(context.Background(), "tags-off", "Мастер и Маргарита", "", enabled, map[string]bool{SourceLiveLib: true})
-	if bookHits != 1 {
-		t.Errorf("enabling tags did not fetch the book page: %d", bookHits)
+	if searchHits != 2 || bookHits != 0 {
+		t.Errorf("enabling tags: search %d, book %d", searchHits, bookHits)
 	}
 	if len(res.Tags) == 0 {
 		t.Error("tags were not collected after enabling")
+	}
+}
+
+func TestLiveLibPicksBookMatchingTitleAndAuthor(t *testing.T) {
+	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/book/") {
+			t.Errorf("book page must not be requested: %s", r.URL.Path)
+		}
+		if !strings.Contains(r.URL.Path, "Джонатан Сафран Фоер") {
+			t.Errorf("search query does not contain the author: %q", r.URL.Path)
+		}
+		w.Write([]byte(livelibWrongFirstHTML))
+	}))
+	defer ll.Close()
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.LiveLibBase = ll.URL
+	res := p.Get(context.Background(), "wrong-first", "Вот я", "Джонатан Сафран Фоер",
+		map[string]bool{SourceLiveLib: true}, map[string]bool{SourceLiveLib: true})
+	if res.Primary == nil {
+		t.Fatalf("no match: %+v", res)
+	}
+	got := res.Primary
+	if got.Rating != 3.9 {
+		t.Errorf("rating = %v, want 3.9", got.Rating)
+	}
+	if !strings.HasSuffix(got.InfoURL, "/book/1007412814-vot-ya-dzhonatan-safran-foer") {
+		t.Errorf("infoUrl = %q", got.InfoURL)
+	}
+	joined := strings.Join(res.Tags, "|")
+	for _, want := range []string{"Современная проза", "Современная зарубежная литература"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing tag %q in %v", want, res.Tags)
+		}
+	}
+	if strings.Contains(joined, "Детская литература") {
+		t.Errorf("foreign tags leaked: %v", res.Tags)
+	}
+}
+
+func TestLiveLibNoConfidentMatch(t *testing.T) {
+	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(livelibWrongFirstHTML))
+	}))
+	defer ll.Close()
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.LiveLibBase = ll.URL
+	res := p.Get(context.Background(), "no-match", "Вот я", "Другой Автор",
+		map[string]bool{SourceLiveLib: true}, map[string]bool{SourceLiveLib: true})
+	if !res.Negative || res.Primary != nil {
+		t.Fatalf("mismatched author must not enrich: %+v", res)
 	}
 }
 
@@ -198,5 +286,50 @@ func TestEnrichCachePersistence(t *testing.T) {
 	res := p2.Get(context.Background(), "5", "Мастер и Маргарита", "", allEnabled(), allTagSources())
 	if res.Primary == nil || res.Primary.Rating != 4.5 {
 		t.Errorf("cached result = %+v", res.Primary)
+	}
+}
+
+func TestEnrichCacheVersionInvalidates(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cache.json")
+
+	var hits int
+	ll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Write([]byte(livelibHTML))
+	}))
+	defer ll.Close()
+
+	p := New(cachePath)
+	p.LiveLibBase = ll.URL
+	enabled := map[string]bool{SourceLiveLib: true}
+	p.Get(context.Background(), "v", "Мастер и Маргарита", "", enabled, nil)
+	if hits != 1 {
+		t.Fatalf("first request hits = %d", hits)
+	}
+
+	// Simulate an entry written by an older parser.
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache map[string]cacheEntry
+	if err := json.Unmarshal(data, &cache); err != nil {
+		t.Fatal(err)
+	}
+	entry := cache["v"]
+	entry.Version = cacheVersion - 1
+	cache["v"] = entry
+	if data, err = json.Marshal(cache); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p2 := New(cachePath)
+	p2.LiveLibBase = ll.URL
+	p2.Get(context.Background(), "v", "Мастер и Маргарита", "", enabled, nil)
+	if hits != 2 {
+		t.Errorf("stale cache was reused: hits = %d", hits)
 	}
 }

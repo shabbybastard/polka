@@ -4,7 +4,7 @@
 TAG_VERSION := $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//')
 VERSION ?= $(if $(TAG_VERSION),$(TAG_VERSION),$(shell cat VERSION 2>/dev/null || git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev))
 # Keep build metadata free of the tag's "v" prefix even when VERSION is
-# passed explicitly (e.g. VERSION=v0.1.22-fork.4).
+# passed explicitly (e.g. VERSION=v0.1.22-fork.5).
 override VERSION := $(patsubst v%,%,$(VERSION))
 # deb/rpm treat "-fork.1" as a prerelease ("0.1.22~fork.1"), which sorts
 # below 0.1.22. Package metadata uses "+fork.1" so fork builds are newer.

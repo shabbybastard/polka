@@ -118,6 +118,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			"POST /admin/books/{id}/restore",
 			"POST /admin/books/{id}/metadata",
 			"POST /admin/books/{id}/epub",
+			"POST /admin/books/{id}/forget-enrichment",
 			"POST /admin/import/inpx",
 			"GET /admin/import/status",
 			"GET /admin/settings",
@@ -141,6 +142,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			mux.HandleFunc("POST /admin/books/{id}/restore", s.adminOnly(s.handleBookSetDeleted(false)))
 			mux.HandleFunc("POST /admin/books/{id}/metadata", s.adminOnly(s.handleBookMetadata))
 			mux.HandleFunc("POST /admin/books/{id}/epub", s.adminOnly(s.handleBookEPUBEdit))
+			mux.HandleFunc("POST /admin/books/{id}/forget-enrichment", s.adminOnly(s.handleForgetBookEnrichment))
 			mux.HandleFunc("POST /admin/import/inpx", s.adminOnly(s.handleImportInpx))
 			mux.HandleFunc("GET /admin/import/status", s.adminOnly(s.handleImportStatus))
 		}

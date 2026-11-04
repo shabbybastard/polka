@@ -69,6 +69,24 @@ func (s *Server) handleGetEnrichment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, res)
 }
 
+// POST /admin/books/{id}/forget-enrichment — remove external ratings, genres
+// and links for one book. Native genres and Polka's own rating are kept.
+func (s *Server) handleForgetBookEnrichment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	removed, err := s.st.DeleteBookExternalGenres(r.Context(), id)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	s.enrich.ForgetBook(strconv.FormatInt(id, 10))
+	s.invalidateGenreCache()
+	writeJSON(w, map[string]any{"ok": true, "removedGenres": removed})
+}
+
 // --- Settings (administrator only) ---
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {

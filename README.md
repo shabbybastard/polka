@@ -36,10 +36,12 @@ mobile reading app.
   source by the admin. External genres (LiveLib genres and Open Library
   subjects) can be merged into the catalog; both sources are off by default
   and disabling one removes the genres it contributed.
-- **Admin tools.** Edit a book's title, authors, EPUB metadata and cover, change
-  user display names, hide the home-page hero banner, reset a reader's progress
-  when a position is no longer wanted, and bulk-load external genres for the
-  whole catalog or only for books without genres (throttled server-side job).
+- **Admin tools.** Edit a book's title, authors (one "last first middle" field),
+  EPUB metadata and cover, remove external ratings, genres and links for a
+  single book, change user display names, hide the home-page hero banner, reset
+  a reader's progress when a position is no longer wanted, and bulk-load external
+  genres for the whole catalog or only for books without genres (throttled
+  server-side job).
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
@@ -236,6 +238,12 @@ default.
   restored from an older snapshot.
 - External genres are cached together with ratings; enabling a source after
   the cache was filled without genres refreshes the affected book lazily.
+  LiveLib results are matched by normalized title and author and genres are
+  taken from the search page itself; an uncertain match is skipped instead of
+  attaching another book's rating and genres.
+- The catalog at `/search` shows every genre shelf in alphabetical order, with
+  books sorted by title inside each shelf. Bulk genre loading is throttled
+  (2 s + jitter per source) and backs off for an hour on HTTP 403/429.
 
 ## About this fork
 
@@ -249,8 +257,8 @@ The current fork state is based on upstream v0.1.22. Upstream features will be p
 selectively when they are worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.4`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.4`, and the version for local
+(current: `v0.1.22-fork.5`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.5`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

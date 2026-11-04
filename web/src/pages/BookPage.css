@@ -469,7 +469,7 @@ a.tag:hover {
 
 .book-page__author-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
 }

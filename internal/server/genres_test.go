@@ -24,6 +24,51 @@ func TestGenreSyncRequiresSource(t *testing.T) {
 	}
 }
 
+func TestForgetBookEnrichment(t *testing.T) {
+	f := newFullServer(t, "required")
+	ctx := t.Context()
+
+	if err := f.st.SaveBookGenres(ctx, f.bookID, "livelib", []string{"Классика", "Роман"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SaveBookGenres(ctx, f.bookID, "open_library", []string{"Classics"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SaveBookGenres(ctx, f.bookID2, "livelib", []string{"Классика"}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, f.admin, f.ts.URL+"/admin/books/"+itoa64(f.bookID)+"/forget-enrichment", nil)
+	var body map[string]any
+	decode(t, resp, &body)
+	if body["ok"] != true || body["removedGenres"].(float64) != 3 {
+		t.Errorf("forget response: %v", body)
+	}
+
+	details, err := f.st.BookDetails(ctx, f.bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Genres) != 1 || details.Genres[0] != "prose_classic" {
+		t.Errorf("book genres after forget: %v", details.Genres)
+	}
+
+	// Another book keeps its external genres, and the shared "Классика"
+	// genre must survive because that book still uses it.
+	other, err := f.st.BookDetails(ctx, f.bookID2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other.Genres) != 2 {
+		t.Errorf("other book genres: %v", other.Genres)
+	}
+	var n int
+	f.st.DB().QueryRow(`SELECT count(*) FROM genres WHERE source = 'livelib'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("orphaned livelib genres left: %d", n)
+	}
+}
+
 func TestExternalGenresInCatalog(t *testing.T) {
 	f := newFullServer(t, "required")
 

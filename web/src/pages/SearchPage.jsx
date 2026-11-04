@@ -65,7 +65,7 @@ const SearchPage = ({ config }) => {
     };
   }, [query, scope, groupId, enabled]);
 
-  // Catalog with no query and no group — show random shelves by genre.
+  // Catalog with no query and no group — every genre shelf, A–Z.
   const [catalogShelves, setCatalogShelves] = useState([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
 

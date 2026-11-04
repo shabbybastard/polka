@@ -337,6 +337,11 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       .catch(() => setColMsg({ ok: false, text: t("admin.collections.fail", { err: "" }) }));
   };
 
+  const genrePercent =
+    genreStatus && Number(genreStatus.total) > 0
+      ? Math.min(100, Math.round((Number(genreStatus.processed) / Number(genreStatus.total)) * 100))
+      : 0;
+
   return (
     <div className="container library-admin">
       <header className="library-admin__header">
@@ -639,8 +644,8 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </ul>
         )}
         {enrichment && (
-          <>
-            <div className="library-admin__key-row">
+          <div className="library-admin__genre-sync">
+            <div className="library-admin__genre-actions">
               <button
                 type="button"
                 className="btn btn-primary"
@@ -663,23 +668,41 @@ const AdminLibraryPage = ({ onConfigChange }) => {
               >
                 {t("admin.genres.syncEmpty")}
               </button>
-              {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
-                <span className="library-admin__source-hint">
-                  {genreStatus.mode === "empty" ? t("admin.genres.modeEmpty") : t("admin.genres.modeAll")}
-                  {" · "}
-                  {t("admin.genres.progress", {
-                    processed: Number(genreStatus.processed).toLocaleString(),
-                    total: Number(genreStatus.total).toLocaleString(),
-                    updated: Number(genreStatus.updated).toLocaleString(),
-                  })}
-                </span>
-              )}
-              {genreStatus?.error && (
-                <span className="library-admin__error">{genreStatus.error}</span>
-              )}
             </div>
-            <p className="library-admin__hint">{t("admin.genres.background")}</p>
-          </>
+            {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
+              <div className="library-admin__genre-status">
+                <div className="library-admin__genre-status-head">
+                  <span className="library-admin__genre-mode">
+                    {genreStatus.mode === "empty"
+                      ? t("admin.genres.modeEmpty")
+                      : t("admin.genres.modeAll")}
+                  </span>
+                  <span className="library-admin__genre-progress">
+                    {t("admin.genres.progress", {
+                      processed: Number(genreStatus.processed).toLocaleString(),
+                      total: Number(genreStatus.total).toLocaleString(),
+                      updated: Number(genreStatus.updated).toLocaleString(),
+                    })}
+                  </span>
+                </div>
+                <div
+                  className="library-admin__genre-bar"
+                  role="progressbar"
+                  aria-valuemin="0"
+                  aria-valuemax={Number(genreStatus.total) || 0}
+                  aria-valuenow={Number(genreStatus.processed) || 0}
+                >
+                  <span style={{ width: `${genrePercent}%` }} />
+                </div>
+              </div>
+            )}
+            {genreStatus?.error && (
+              <div className="library-admin__genre-error">{genreStatus.error}</div>
+            )}
+            <p className="library-admin__hint library-admin__genre-note">
+              {t("admin.genres.background")}
+            </p>
+          </div>
         )}
       </section>
 

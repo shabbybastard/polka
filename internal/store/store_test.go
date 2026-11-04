@@ -235,10 +235,26 @@ func TestShelves(t *testing.T) {
 		}
 	}
 
-	// Catalog shelves: random genres that have books, at most `limit` each.
-	cat, err := st.CatalogShelves(ctx, 10, 1)
+	// Catalog shelves: every genre that has books, in stable alphabetical
+	// order, with books sorted by title inside each shelf.
+	cat, err := st.CatalogShelves(ctx, 0, 10)
 	if err != nil || len(cat) != 3 {
 		t.Fatalf("catalog shelves: %d %v", len(cat), err)
+	}
+	for i, want := range []string{"dramaturgy", "prose_classic", "Фантастика"} {
+		if cat[i].Title != want {
+			t.Errorf("catalog order %d = %q, want %q", i, cat[i].Title, want)
+		}
+	}
+	if got := strings.Join(titles(cat[1].Books), ","); got != "Анна Каренина,Война и мир,Рассказы" {
+		t.Errorf("prose_classic books: %s", got)
+	}
+	if got := strings.Join(titles(cat[2].Books), ","); got != "Пикник на обочине,Солярис" {
+		t.Errorf("sf books: %s", got)
+	}
+	cat, _ = st.CatalogShelves(ctx, 10, 1)
+	if len(cat) != 3 {
+		t.Fatalf("catalog shelves: %d", len(cat))
 	}
 	for _, s := range cat {
 		if !strings.HasPrefix(s.ID, "genre_") || len(s.Books) != 1 || !s.HasMore && s.ID != "genre_dramaturgy" {

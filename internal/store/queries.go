@@ -360,14 +360,20 @@ func (s *Store) ShelfBooks(ctx context.Context, shelfID string, limit, offset in
 	return books, "", err
 }
 
-// CatalogShelves returns random genre selections for the catalog page.
+// CatalogShelves returns genre shelves for the catalog page in a stable
+// alphabetical order. count <= 0 means every genre that has books.
 func (s *Store) CatalogShelves(ctx context.Context, count, limit int) ([]Shelf, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	query := `
 		SELECT g.id, g.code, coalesce(nullif(g.name, ''), g.code)
 		FROM genres g
 		WHERE EXISTS (SELECT 1 FROM book_genres bg WHERE bg.genre_id = g.id)
-		ORDER BY random()
-		LIMIT ?`, count)
+		ORDER BY lower(coalesce(nullif(g.name, ''), g.code)), g.code`
+	args := []any{}
+	if count > 0 {
+		query += ` LIMIT ?`
+		args = append(args, count)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -394,8 +400,8 @@ func (s *Store) CatalogShelves(ctx context.Context, count, limit int) ([]Shelf, 
 	for _, g := range picked {
 		books, err := s.queryBooks(ctx,
 			`b.id IN (SELECT bg.book_id FROM book_genres bg JOIN books lb ON lb.id = bg.book_id AND lb.deleted = 0
-			          WHERE bg.genre_id = ? ORDER BY random() LIMIT ?)`,
-			`b.title`, 0, 0, g.id, limit)
+			          WHERE bg.genre_id = ? ORDER BY lb.title COLLATE NOCASE LIMIT ?)`,
+			`b.title COLLATE NOCASE`, 0, 0, g.id, limit)
 		if err != nil {
 			return nil, err
 		}

@@ -6,7 +6,7 @@ import RatingStars from "../components/RatingStars";
 import RateStars from "../components/RateStars";
 import { fetchBookForm, fetchExternalEnrichment, fetchSimilarBooks } from "../api/fetchBooks";
 import Shelf from "../components/Shelf";
-import { deleteBook, updateBookEPUB, updateBookMetadata } from "../api/manage";
+import { deleteBook, forgetBookEnrichment, updateBookEPUB, updateBookMetadata } from "../api/manage";
 import { deleteProgress, fetchProgress, localProgress } from "../api/reader";
 import { rateBook } from "../api/ratings";
 import { toggleWishlist } from "../api/lists";
@@ -19,6 +19,20 @@ const formatBytes = (bytes) => {
   if (bytes > 1024 * 1024) return t("book.mb", { n: (bytes / 1024 / 1024).toFixed(1) });
   return t("book.kb", { n: (bytes / 1024).toFixed(1) });
 };
+
+// The editor shows one "Фамилия Имя Отчество" field. The backend keeps the
+// structured {last, first, middle} shape, so split it back on save.
+const parseAuthorName = (value) => {
+  const parts = String(value ?? "").trim().split(/\s+/).filter(Boolean);
+  return {
+    last: parts[0] ?? "",
+    first: parts[1] ?? "",
+    middle: parts.slice(2).join(" "),
+  };
+};
+
+const formatAuthorName = (author) =>
+  [author?.last, author?.first, author?.middle].filter(Boolean).join(" ");
 
 const BookPage = ({ user, sync }) => {
   const { bookId } = useParams();
@@ -70,6 +84,7 @@ const BookPage = ({ user, sync }) => {
   const [similar, setSimilar] = useState(null); // {similar: [], external: []}
   const [readProgress, setReadProgress] = useState(0);
   const [forgetBusy, setForgetBusy] = useState(false);
+  const [forgetExternalBusy, setForgetExternalBusy] = useState(false);
   const [smtpReady, setSmtpReady] = useState(false);
   const [readerEmail, setReaderEmailState] = useState("");
   const [sendState, setSendState] = useState("idle");
@@ -154,14 +169,46 @@ const BookPage = ({ user, sync }) => {
       .finally(() => setForgetBusy(false));
   };
 
+  const forgetExternal = () => {
+    if (forgetExternalBusy || !confirm(t("book.forgetExternalConfirm"))) return;
+    setForgetExternalBusy(true);
+    forgetBookEnrichment(bookId)
+      .then(() => {
+        // Drop the ratings, links and similar books from the current view.
+        // The enrichment effect does not depend on the genre list, so it
+        // will not immediately re-fetch and re-save the same data.
+        setEnrichment(null);
+        setSimilar(null);
+        return fetchBookForm({ selectedItemID: bookId }).then((res) => {
+          if (!res?.bookForm) return;
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  bookForm: {
+                    ...prev.bookForm,
+                    Genres: res.bookForm.Genres ?? "",
+                  },
+                  genresList: res.genresList ?? [],
+                }
+              : prev
+          );
+        });
+      })
+      .catch(() => alert(t("book.forgetExternalFail")))
+      .finally(() => setForgetExternalBusy(false));
+  };
+
   const openEditor = () => {
     setEditTitle(data?.bookForm?.Title ?? "");
     const authors = (data?.authors ?? []).map((a) => ({
-      last: a.LastName ?? "",
-      first: a.FirstName ?? "",
-      middle: a.MiddleName ?? "",
+      name: formatAuthorName({
+        last: a.LastName,
+        first: a.FirstName,
+        middle: a.MiddleName,
+      }),
     }));
-    setEditAuthors(authors.length ? authors : [{ last: "", first: "", middle: "" }]);
+    setEditAuthors(authors.length ? authors : [{ name: "" }]);
     setEditLanguage(data?.language ?? "");
     setEditPublisher(data?.publisher ?? "");
     setEditYear(data?.year ?? "");
@@ -196,11 +243,10 @@ const BookPage = ({ user, sync }) => {
     [editCoverPreview]
   );
 
-  const changeAuthor = (index, field, value) =>
-    setEditAuthors((prev) => prev.map((a, i) => (i === index ? { ...a, [field]: value } : a)));
+  const changeAuthor = (index, value) =>
+    setEditAuthors((prev) => prev.map((a, i) => (i === index ? { name: value } : a)));
 
-  const addAuthor = () =>
-    setEditAuthors((prev) => [...prev, { last: "", first: "", middle: "" }]);
+  const addAuthor = () => setEditAuthors((prev) => [...prev, { name: "" }]);
 
   const removeAuthor = (index) =>
     setEditAuthors((prev) => prev.filter((_, i) => i !== index));
@@ -214,7 +260,9 @@ const BookPage = ({ user, sync }) => {
     }
     setEditBusy(true);
     setEditError("");
-    const authors = editAuthors.filter((a) => a.last.trim() || a.first.trim() || a.middle.trim());
+    const authors = editAuthors
+      .map((a) => parseAuthorName(a.name))
+      .filter((a) => a.last || a.first || a.middle);
     const isEpub = data?.bookForm?.Ext === ".epub";
     let request;
     if (isEpub) {
@@ -656,6 +704,15 @@ const BookPage = ({ user, sync }) => {
                     <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
                       {t("book.edit")}
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost book-page__forget-external"
+                      onClick={forgetExternal}
+                      disabled={forgetExternalBusy}
+                      title={t("book.forgetExternalHint")}
+                    >
+                      {forgetExternalBusy ? "…" : t("book.forgetExternal")}
+                    </button>
                     <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
                       {t("book.delete")}
                     </button>
@@ -823,24 +880,10 @@ const BookPage = ({ user, sync }) => {
                 <div className="book-page__author-row" key={i}>
                   <input
                     type="text"
-                    placeholder={t("book.edit.last")}
-                    value={a.last}
-                    onChange={(e) => changeAuthor(i, "last", e.target.value)}
-                    maxLength={128}
-                  />
-                  <input
-                    type="text"
-                    placeholder={t("book.edit.first")}
-                    value={a.first}
-                    onChange={(e) => changeAuthor(i, "first", e.target.value)}
-                    maxLength={128}
-                  />
-                  <input
-                    type="text"
-                    placeholder={t("book.edit.middle")}
-                    value={a.middle}
-                    onChange={(e) => changeAuthor(i, "middle", e.target.value)}
-                    maxLength={128}
+                    placeholder={t("book.edit.authorPlaceholder")}
+                    value={a.name}
+                    onChange={(e) => changeAuthor(i, e.target.value)}
+                    maxLength={384}
                   />
                   <button
                     type="button"

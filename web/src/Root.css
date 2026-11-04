@@ -1,5 +1,15 @@
+/* Keep the footer at the bottom without adding artificial height: the old
+   min-height calculation plus the footer itself was always ~20px taller
+   than the viewport, which produced a scrollbar on 1080p screens. */
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 .root-main {
-  min-height: calc(100vh - var(--header-h) - 64px);
+  flex: 1 0 auto;
   padding-top: 16px;
   padding-bottom: 24px;
 }
