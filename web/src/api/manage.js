@@ -73,7 +73,8 @@ export const exportUrl = (ids) => api.buildUrl(`Images/export?ids=${ids.join(","
 
 export const fetchSettings = () => api.getJson("admin/settings");
 
-export const syncGenres = () => post("admin/genres/sync");
+export const syncGenres = (mode = "all") =>
+  post(`admin/genres/sync?mode=${encodeURIComponent(mode)}`);
 
 export const genreSyncStatus = () => api.getJson("admin/genres/status");
 

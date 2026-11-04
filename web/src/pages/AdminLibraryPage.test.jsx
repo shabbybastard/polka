@@ -54,6 +54,7 @@ describe("AdminLibraryPage", () => {
     );
 
     const livelib = await screen.findByLabelText(t("admin.tags.livelib"));
+    expect(screen.getByRole("button", { name: t("admin.genres.syncEmpty") })).toBeInTheDocument();
     fireEvent.click(livelib);
     await waitFor(() =>
       expect(saveSettings).toHaveBeenCalledWith({

@@ -395,9 +395,23 @@ func (s *Store) FindSimilar(ctx context.Context, title string, authorLastNames [
 }
 
 // BooksForEnrichment walks live books in id order for background
-// enrichment jobs.
-func (s *Store) BooksForEnrichment(ctx context.Context, afterID int64, limit int) ([]Book, error) {
-	return s.queryBooks(ctx, `b.id > ?`, `b.id`, limit, 0, afterID)
+// enrichment jobs. onlyEmpty restricts it to books without any genres.
+func (s *Store) BooksForEnrichment(ctx context.Context, afterID int64, limit int, onlyEmpty bool) ([]Book, error) {
+	where := `b.id > ?`
+	if onlyEmpty {
+		where += ` AND NOT EXISTS (SELECT 1 FROM book_genres bg WHERE bg.book_id = b.id)`
+	}
+	return s.queryBooks(ctx, where, `b.id`, limit, 0, afterID)
+}
+
+// BooksWithoutGenresCount is the total for the "only empty" bulk job.
+func (s *Store) BooksWithoutGenresCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM books b
+		WHERE b.deleted = 0
+		AND NOT EXISTS (SELECT 1 FROM book_genres bg WHERE bg.book_id = b.id)`).Scan(&n)
+	return n, err
 }
 
 // BooksByIDs returns books in the order of the given ids (missing

@@ -39,7 +39,7 @@ mobile reading app.
 - **Admin tools.** Edit a book's title, authors, EPUB metadata and cover, change
   user display names, hide the home-page hero banner, reset a reader's progress
   when a position is no longer wanted, and bulk-load external genres for the
-  whole catalog.
+  whole catalog or only for books without genres (throttled server-side job).
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
@@ -249,8 +249,8 @@ The current fork state is based on upstream v0.1.22. Upstream features will be p
 selectively when they are worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.3`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.3`, and the version for local
+(current: `v0.1.22-fork.4`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.4`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

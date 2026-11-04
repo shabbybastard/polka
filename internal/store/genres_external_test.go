@@ -71,6 +71,26 @@ func TestExternalGenres(t *testing.T) {
 	}
 }
 
+func TestBooksWithoutGenres(t *testing.T) {
+	st, _ := newLibrary(t)
+	ctx := context.Background()
+	id, err := st.AddBook(ctx, &BookInput{
+		Title: "No genres", Authors: []AuthorName{{Last: "Author"}},
+		Folder: "one.zip", File: "empty", Ext: "fb2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.BooksWithoutGenresCount(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("empty books count = %d, %v", n, err)
+	}
+	books, err := st.BooksForEnrichment(ctx, 0, 10, true)
+	if err != nil || len(books) != 1 || books[0].ID != id {
+		t.Fatalf("empty books: %v, %v", books, err)
+	}
+}
+
 func hasGenreSource(counts []GenreCount, source string) bool {
 	for _, g := range counts {
 		if g.Source == source {

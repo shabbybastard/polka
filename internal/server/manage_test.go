@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/vestigiumincaligne/polka/internal/auth"
 	"github.com/vestigiumincaligne/polka/internal/config"
@@ -192,6 +193,7 @@ func TestWebImportInpx(t *testing.T) {
 	// Wait for the background import to finish
 	deadline := 100
 	for ; deadline > 0; deadline-- {
+		time.Sleep(10 * time.Millisecond)
 		var status map[string]any
 		resp, _ := client.Get(ts.URL + "/admin/import/status")
 		json.NewDecoder(resp.Body).Decode(&status)
@@ -264,6 +266,7 @@ func TestWebImportInpxFromPath(t *testing.T) {
 	}
 
 	for deadline := 100; deadline > 0; deadline-- {
+		time.Sleep(10 * time.Millisecond)
 		var status map[string]any
 		resp, _ := client.Get(ts.URL + "/admin/import/status")
 		json.NewDecoder(resp.Body).Decode(&status)

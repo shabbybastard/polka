@@ -195,13 +195,13 @@ const AdminLibraryPage = ({ onConfigChange }) => {
     });
   };
 
-  const startGenreSync = () => {
+  const startGenreSync = (mode) => {
     if (!tagSources.livelib && !tagSources.open_library) {
       alert(t("admin.genres.noSource"));
       return;
     }
-    if (!confirm(t("admin.genres.confirm"))) return;
-    syncGenres()
+    if (!confirm(t(mode === "empty" ? "admin.genres.confirmEmpty" : "admin.genres.confirm"))) return;
+    syncGenres(mode)
       .then(() => pollGenreStatus())
       .catch((err) => alert(err.status === 409 ? t("admin.genres.running") : t("admin.genres.fail")));
   };
@@ -639,31 +639,47 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </ul>
         )}
         {enrichment && (
-          <div className="library-admin__key-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={startGenreSync}
-              disabled={
-                Boolean(genreStatus?.running) ||
-                (!tagSources.livelib && !tagSources.open_library)
-              }
-            >
-              {genreStatus?.running ? t("admin.genres.syncing") : t("admin.genres.sync")}
-            </button>
-            {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
-              <span className="library-admin__source-hint">
-                {t("admin.genres.progress", {
-                  processed: Number(genreStatus.processed).toLocaleString(),
-                  total: Number(genreStatus.total).toLocaleString(),
-                  updated: Number(genreStatus.updated).toLocaleString(),
-                })}
-              </span>
-            )}
-            {genreStatus?.error && (
-              <span className="library-admin__error">{genreStatus.error}</span>
-            )}
-          </div>
+          <>
+            <div className="library-admin__key-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => startGenreSync("all")}
+                disabled={
+                  Boolean(genreStatus?.running) ||
+                  (!tagSources.livelib && !tagSources.open_library)
+                }
+              >
+                {t("admin.genres.sync")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => startGenreSync("empty")}
+                disabled={
+                  Boolean(genreStatus?.running) ||
+                  (!tagSources.livelib && !tagSources.open_library)
+                }
+              >
+                {t("admin.genres.syncEmpty")}
+              </button>
+              {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
+                <span className="library-admin__source-hint">
+                  {genreStatus.mode === "empty" ? t("admin.genres.modeEmpty") : t("admin.genres.modeAll")}
+                  {" · "}
+                  {t("admin.genres.progress", {
+                    processed: Number(genreStatus.processed).toLocaleString(),
+                    total: Number(genreStatus.total).toLocaleString(),
+                    updated: Number(genreStatus.updated).toLocaleString(),
+                  })}
+                </span>
+              )}
+              {genreStatus?.error && (
+                <span className="library-admin__error">{genreStatus.error}</span>
+              )}
+            </div>
+            <p className="library-admin__hint">{t("admin.genres.background")}</p>
+          </>
         )}
       </section>
 

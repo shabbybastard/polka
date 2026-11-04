@@ -4,6 +4,13 @@
   padding-bottom: 24px;
 }
 
+@media (max-width: 900px) {
+  .root-main {
+    /* The mobile header wraps into two rows and needs more breathing room. */
+    padding-top: 28px;
+  }
+}
+
 .root-footer {
   border-top: 1px solid var(--border);
   background: var(--bg-card);

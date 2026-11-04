@@ -5,8 +5,10 @@ package enrich
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,6 +28,12 @@ const (
 	negativeTTL  = 7 * 24 * time.Hour
 	transientTTL = 5 * time.Minute
 	httpTimeout  = 6 * time.Second
+
+	// Background genre loading is deliberately slow: LiveLib treats a
+	// bursting client as a bot and starts returning 403.
+	throttleDelay  = 2 * time.Second
+	throttleJitter = 750 * time.Millisecond
+	blockedBackoff = time.Hour
 )
 
 // Sources lists all sources in priority order.
@@ -66,6 +74,9 @@ type Provider struct {
 	similar map[string]similarEntry
 	backoff map[string]time.Time // source -> do not query until
 
+	throttleMu  sync.Mutex
+	lastRequest map[string]time.Time
+
 	// Base URLs are overridden in tests.
 	LiveLibBase     string
 	GoogleBase      string
@@ -80,6 +91,7 @@ func New(cachePath string) *Provider {
 		cachePath:       cachePath,
 		cache:           map[string]cacheEntry{},
 		backoff:         map[string]time.Time{},
+		lastRequest:     map[string]time.Time{},
 		LiveLibBase:     "https://www.livelib.ru",
 		GoogleBase:      "https://www.googleapis.com",
 		OpenLibraryBase: "https://openlibrary.org",
@@ -120,10 +132,18 @@ func tagSourcesKey(tagSources map[string]bool) string {
 	return strings.Join(keys, ",")
 }
 
-// Get returns book enrichment, querying the enabled sources. tagSources
-// selects which sources may fetch tags; the LiveLib page request and the
-// Open Library subject parsing are skipped when their toggle is off.
+// Get returns book enrichment for interactive use without throttling.
 func (p *Provider) Get(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
+	return p.getEnrichment(ctx, key, title, author, enabled, tagSources, false)
+}
+
+// GetThrottled is used by the background genre loader: it waits between
+// actual HTTP requests so a bulk run does not trip anti-bot protection.
+func (p *Provider) GetThrottled(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
+	return p.getEnrichment(ctx, key, title, author, enabled, tagSources, true)
+}
+
+func (p *Provider) getEnrichment(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool, throttle bool) *Enrichment {
 	tagKey := tagSourcesKey(tagSources)
 	p.mu.Lock()
 	if e, ok := p.cache[key]; ok {
@@ -160,11 +180,18 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 			continue
 		}
 
-		r, err := p.fetch(ctx, source, title, author, tagSources[source])
+		r, err := p.fetch(ctx, source, title, author, tagSources[source], throttle)
 		if err != nil {
-			// Network/transient error: short back-off, not cached.
+			// Rate limits and bot blocks deserve a much longer pause than
+			// a temporary network failure.
+			delay := transientTTL
+			var statusErr *httpStatusError
+			if errors.As(err, &statusErr) &&
+				(statusErr.Status == http.StatusForbidden || statusErr.Status == http.StatusTooManyRequests) {
+				delay = blockedBackoff
+			}
 			p.mu.Lock()
-			p.backoff[source] = time.Now().Add(transientTTL)
+			p.backoff[source] = time.Now().Add(delay)
 			p.mu.Unlock()
 			continue
 		}
@@ -226,16 +253,44 @@ func collectTags(sources []Result) []string {
 	return out
 }
 
-func (p *Provider) fetch(ctx context.Context, source, title, author string, withTags bool) (*Result, error) {
+func (p *Provider) fetch(ctx context.Context, source, title, author string, withTags, throttle bool) (*Result, error) {
 	switch source {
 	case SourceLiveLib:
-		return p.fetchLiveLib(ctx, title, author, withTags)
+		return p.fetchLiveLib(ctx, title, author, withTags, throttle)
 	case SourceGoogleBooks:
-		return p.fetchGoogleBooks(ctx, title, author)
+		return p.fetchGoogleBooks(ctx, title, author, throttle)
 	case SourceOpenLibrary:
-		return p.fetchOpenLibrary(ctx, title, author, withTags)
+		return p.fetchOpenLibrary(ctx, title, author, withTags, throttle)
 	}
 	return nil, nil
+}
+
+// throttle spaces real HTTP requests to one source. It is a no-op for
+// interactive requests; the background job enables it.
+func (p *Provider) throttle(ctx context.Context, source string) {
+	p.throttleMu.Lock()
+	defer p.throttleMu.Unlock()
+	delay := throttleDelay + time.Duration(rand.Int63n(int64(throttleJitter)))
+	wait := time.Until(p.lastRequest[source].Add(delay))
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+	p.lastRequest[source] = time.Now()
+}
+
+type httpStatusError struct {
+	URL    string
+	Status int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d", e.URL, e.Status)
 }
 
 func (p *Provider) get(ctx context.Context, rawURL string, browser bool) ([]byte, error) {
@@ -253,7 +308,7 @@ func (p *Provider) get(ctx context.Context, rawURL string, browser bool) ([]byte
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", rawURL, resp.StatusCode)
+		return nil, &httpStatusError{URL: rawURL, Status: resp.StatusCode}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
@@ -266,8 +321,11 @@ var (
 	livelibGenreVal = regexp.MustCompile(`"([^"]+)"`)
 )
 
-func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, includeTags bool) (*Result, error) {
+func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, includeTags, throttle bool) (*Result, error) {
 	q := strings.TrimSpace(title)
+	if throttle {
+		p.throttle(ctx, SourceLiveLib)
+	}
 	body, err := p.get(ctx, p.LiveLibBase+"/find/books/"+url.PathEscape(q), true)
 	if err != nil {
 		return nil, err
@@ -288,6 +346,9 @@ func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, inclu
 	if includeTags {
 		// The search result only has the rating; genres live on the book
 		// page in its JSON-LD. A failure here must not discard the rating.
+		if throttle {
+			p.throttle(ctx, SourceLiveLib)
+		}
 		if page, err := p.get(ctx, res.InfoURL, true); err == nil {
 			res.Tags = livelibTags(page)
 		}
@@ -311,7 +372,10 @@ func livelibTags(page []byte) []string {
 
 // --- Google Books ---
 
-func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string) (*Result, error) {
+func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string, throttle bool) (*Result, error) {
+	if throttle {
+		p.throttle(ctx, SourceGoogleBooks)
+	}
 	q := fmt.Sprintf(`intitle:%q`, title)
 	if author != "" {
 		q += fmt.Sprintf(` inauthor:%q`, author)
@@ -354,7 +418,10 @@ func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string) (
 
 // --- Open Library ---
 
-func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string, withTags bool) (*Result, error) {
+func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string, withTags, throttle bool) (*Result, error) {
+	if throttle {
+		p.throttle(ctx, SourceOpenLibrary)
+	}
 	params := url.Values{
 		"title":  {title},
 		"limit":  {"5"},

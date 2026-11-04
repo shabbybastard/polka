@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"time"
 )
 
 // Background loading of external genres for the whole library. Books are
@@ -15,6 +14,7 @@ import (
 type genreSyncState struct {
 	mu        sync.Mutex
 	running   bool
+	mode      string
 	processed int
 	total     int
 	updated   int
@@ -26,6 +26,7 @@ func (st *genreSyncState) snapshot() map[string]any {
 	defer st.mu.Unlock()
 	return map[string]any{
 		"running":   st.running,
+		"mode":      st.mode,
 		"processed": st.processed,
 		"total":     st.total,
 		"updated":   st.updated,
@@ -35,6 +36,15 @@ func (st *genreSyncState) snapshot() map[string]any {
 
 // POST /admin/genres/sync — start loading external genres for every book.
 func (s *Server) handleGenreSyncStart(w http.ResponseWriter, r *http.Request) {
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "all"
+	}
+	if mode != "all" && mode != "empty" {
+		http.Error(w, "mode must be all or empty", http.StatusBadRequest)
+		return
+	}
+
 	sources := s.enabledTagSources(r.Context())
 	anyEnabled := false
 	for _, on := range sources {
@@ -54,21 +64,28 @@ func (s *Server) handleGenreSyncStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "genre loading is already running", http.StatusConflict)
 		return
 	}
-	total, err := s.st.BookCount(r.Context())
+	var total int
+	var err error
+	if mode == "empty" {
+		total, err = s.st.BooksWithoutGenresCount(r.Context())
+	} else {
+		total, err = s.st.BookCount(r.Context())
+	}
 	if err != nil {
 		s.genreSync.mu.Unlock()
 		s.apiError(w, err)
 		return
 	}
 	s.genreSync.running = true
+	s.genreSync.mode = mode
 	s.genreSync.processed = 0
 	s.genreSync.total = total
 	s.genreSync.updated = 0
 	s.genreSync.err = ""
 	s.genreSync.mu.Unlock()
 
-	go s.runGenreSync()
-	writeJSON(w, map[string]any{"started": true})
+	go s.runGenreSync(mode)
+	writeJSON(w, map[string]any{"started": true, "mode": mode})
 }
 
 // GET /admin/genres/status — progress of the background job.
@@ -76,11 +93,12 @@ func (s *Server) handleGenreSyncStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.genreSync.snapshot())
 }
 
-func (s *Server) runGenreSync() {
+func (s *Server) runGenreSync(mode string) {
 	ctx := context.Background()
 	enabled := s.enrichEnabledCtx(ctx)
 	afterID := int64(0)
 	const batchSize = 50
+	onlyEmpty := mode == "empty"
 
 	finish := func(err error) {
 		s.invalidateGenreCache()
@@ -93,7 +111,7 @@ func (s *Server) runGenreSync() {
 	}
 
 	for {
-		books, err := s.st.BooksForEnrichment(ctx, afterID, batchSize)
+		books, err := s.st.BooksForEnrichment(ctx, afterID, batchSize, onlyEmpty)
 		if err != nil {
 			finish(err)
 			return
@@ -117,7 +135,7 @@ func (s *Server) runGenreSync() {
 				finish(nil)
 				return
 			}
-			res := s.enrich.Get(ctx, strconv.FormatInt(book.ID, 10), book.Title, book.AuthorNames, enabled, tagSources)
+			res := s.enrich.GetThrottled(ctx, strconv.FormatInt(book.ID, 10), book.Title, book.AuthorNames, enabled, tagSources)
 			updated := false
 			for _, src := range res.Sources {
 				if len(src.Tags) == 0 {
@@ -136,9 +154,6 @@ func (s *Server) runGenreSync() {
 				s.genreSync.updated++
 			}
 			s.genreSync.mu.Unlock()
-			// Be gentle with the external sites; the job runs in the
-			// background and the administrator sees the progress.
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }

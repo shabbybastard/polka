@@ -332,7 +332,31 @@ const BookPage = ({ user, sync }) => {
       author,
       isbn: data.isbn,
     })
-      .then((res) => !cancelled && setEnrichment(res ?? null))
+      .then((res) => {
+        if (cancelled) return;
+        setEnrichment(res ?? null);
+        // The server saves external tags as genres while handling this
+        // request. Pick the new genre list up immediately, like ratings.
+        if (res?.tags?.length) {
+          fetchBookForm({ selectedItemID: bookId })
+            .then((form) => {
+              if (cancelled || !form?.bookForm) return;
+              setData((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      bookForm: {
+                        ...prev.bookForm,
+                        Genres: form.bookForm.Genres ?? prev.bookForm.Genres,
+                      },
+                      genresList: form.genresList ?? prev.genresList,
+                    }
+                  : prev
+              );
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => !cancelled && setEnrichment(null))
       .finally(() => !cancelled && setEnrichmentLoading(false));
 
@@ -348,7 +372,7 @@ const BookPage = ({ user, sync }) => {
     return () => {
       cancelled = true;
     };
-  }, [data]);
+  }, [data?.bookForm?.BookID, data?.bookForm?.Title, data?.bookForm?.AuthorsNames, data?.isbn]);
 
   const authorsLine = useMemo(() => {
     if (!data?.authors?.length) return data?.bookForm?.AuthorsNames ?? "";

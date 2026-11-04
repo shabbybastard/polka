@@ -12,6 +12,12 @@ func TestGenreSyncRequiresSource(t *testing.T) {
 	if got := code(t, f.admin, "POST", f.ts.URL+"/admin/genres/sync", ""); got != http.StatusConflict {
 		t.Errorf("sync without sources -> %d, want 409", got)
 	}
+	if got := code(t, f.admin, "POST", f.ts.URL+"/admin/genres/sync?mode=empty", ""); got != http.StatusConflict {
+		t.Errorf("empty sync without sources -> %d, want 409", got)
+	}
+	if got := code(t, f.admin, "POST", f.ts.URL+"/admin/genres/sync?mode=bogus", ""); got != http.StatusBadRequest {
+		t.Errorf("invalid mode -> %d, want 400", got)
+	}
 	status := getJSONWith(t, f.admin, f.ts.URL+"/admin/genres/status")
 	if status["running"] != false {
 		t.Errorf("status: %v", status)
