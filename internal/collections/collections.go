@@ -202,8 +202,10 @@ type Service struct {
 }
 
 func Open(path string) (*Service, error) {
+	// Same trade-off as polka.db: after a power loss the last transactions
+	// may be lost, but the database itself is not corrupted.
 	db, err := sqlitedrv.Open(path, sqlitedrv.Options{
-		WAL: true, BusyTimeout: 10000, ForeignKeys: true,
+		WAL: true, SyncNormal: true, BusyTimeout: 10000, ForeignKeys: true,
 	})
 	if err != nil {
 		return nil, err

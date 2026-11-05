@@ -67,8 +67,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
 `
 
 func Open(path string) (*Service, error) {
+	// synchronous=NORMAL is the same trade-off as polka.db: a power loss
+	// can lose the last few transactions, but the database stays intact.
 	db, err := sqlitedrv.Open(path, sqlitedrv.Options{
-		WAL: true, BusyTimeout: 10000, ForeignKeys: true,
+		WAL: true, SyncNormal: true, BusyTimeout: 10000, ForeignKeys: true,
 	})
 	if err != nil {
 		return nil, err

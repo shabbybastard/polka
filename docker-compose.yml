@@ -1,8 +1,7 @@
 services:
   polka:
-    image: ghcr.io/vestigiumincaligne/polka:latest
-    # Or build locally instead:
-    # build: .
+    build: .
+    image: polka:local
     ports:
       - "12791:12791"
     volumes:

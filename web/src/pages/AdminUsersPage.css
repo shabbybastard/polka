@@ -52,14 +52,42 @@
   color: #1a1714;
 }
 
+.users-table__email {
+  width: 220px;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.15));
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.users-table__email:focus {
+  outline: 2px solid var(--accent, #ffd24c);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.users-table__actions-cell {
+  padding-left: 0;
+}
+
 .users-table__actions {
-  text-align: right;
+  display: grid;
+  grid-template-columns: repeat(5, 130px);
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
   white-space: nowrap;
 }
 
 .users-table__actions .btn {
-  margin-left: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
   font-size: 13px;
+  text-align: center;
 }
 
 .users-table__danger {
@@ -106,5 +134,5 @@
 }
 
 .users-table {
-  min-width: 640px;
+  min-width: 1180px;
 }

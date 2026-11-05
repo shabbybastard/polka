@@ -92,7 +92,7 @@ Open `http://localhost:12791`, sign in with the bootstrap admin account
 exploring. Or use [docker-compose.yml](docker-compose.yml):
 
 ```sh
-docker compose up -d
+docker compose up -d --build
 ```
 
 ### Desktop app — no server required

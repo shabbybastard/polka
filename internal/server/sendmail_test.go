@@ -3,8 +3,10 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +125,69 @@ func TestSendBookByEmail(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("fake smtp received nothing")
+	}
+}
+
+func TestReaderEmailLimits(t *testing.T) {
+	ts, client, _ := newManageServer(t)
+
+	var prefs map[string]any
+	resp, _ := client.Get(ts.URL + "/api/v1/me/reader-email")
+	decode(t, resp, &prefs)
+	if prefs["maxMessageBytes"].(float64) != float64(14<<20) {
+		t.Errorf("maxMessageBytes = %v", prefs["maxMessageBytes"])
+	}
+	maxMessage := int64(14 << 20)
+	wantAttachment := float64(int64(float64(maxMessage-(64<<10)) / 1.37))
+	if prefs["maxAttachmentBytes"].(float64) != wantAttachment {
+		t.Errorf("maxAttachmentBytes = %v, want %v", prefs["maxAttachmentBytes"], wantAttachment)
+	}
+
+	if got := code(t, client, "POST", ts.URL+"/api/v1/me/reader-email", `{"email":"not-an-email"}`); got != http.StatusBadRequest {
+		t.Errorf("invalid reader email -> %d, want 400", got)
+	}
+	resp = postJSON(t, client, ts.URL+"/api/v1/me/reader-email", map[string]any{"email": "me@kindle.com"})
+	decode(t, resp, &prefs)
+	if prefs["email"] != "me@kindle.com" {
+		t.Errorf("reader email = %v", prefs["email"])
+	}
+}
+
+func TestSendBookOverLimit(t *testing.T) {
+	ts, client, _ := newManageServer(t)
+
+	resp := uploadFiles(t, client, ts.URL+"/admin/books/upload", map[string][]byte{
+		"voyna.fb2": []byte(opdsFB2),
+	}, nil)
+	var up map[string][]uploadResult
+	json.NewDecoder(resp.Body).Decode(&up)
+	resp.Body.Close()
+	bookID := up["results"][0].BookID
+
+	postJSON(t, client, ts.URL+"/admin/settings", map[string]any{
+		"smtp": map[string]any{
+			"enabled": true, "host": "127.0.0.1", "port": 1,
+			"from": "lib@polka.test", "security": "none",
+			// Leaves only ~72 bytes for the raw attachment.
+			"maxMessageBytes": 64*1024 + 100,
+		},
+	}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/v1/me/reader-email", map[string]any{"email": "me@kindle.com"}).Body.Close()
+
+	if got := code(t, client, "POST", ts.URL+"/api/v1/books/"+itoa64(bookID)+"/send", ""); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized send -> %d, want 413", got)
+	}
+}
+
+func TestSMTPTooLargeMapping(t *testing.T) {
+	if !isSMTPTooLarge(&textproto.Error{Code: 552}) {
+		t.Error("552 must map to 413")
+	}
+	if !isSMTPTooLarge(fmt.Errorf("DATA: %w", &textproto.Error{Code: 552, Msg: "too large"})) {
+		t.Error("wrapped 552 must map to 413")
+	}
+	if isSMTPTooLarge(&textproto.Error{Code: 550}) {
+		t.Error("550 must not map to 413")
 	}
 }
 

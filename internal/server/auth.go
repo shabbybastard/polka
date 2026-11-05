@@ -131,6 +131,13 @@ func userJSON(u *auth.User) map[string]any {
 	}
 }
 
+// adminUserJSON adds the per-user reader address for the admin panel.
+func (s *Server) adminUserJSON(r *http.Request, u *auth.User) map[string]any {
+	j := userJSON(u)
+	j["readerEmail"] = s.readerEmail(r, u.ID)
+	return j
+}
+
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -211,7 +218,7 @@ func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request) {
 	}
 	list := make([]map[string]any, 0, len(users))
 	for i := range users {
-		list = append(list, userJSON(&users[i]))
+		list = append(list, s.adminUserJSON(r, &users[i]))
 	}
 	writeJSON(w, map[string]any{"users": list})
 }
@@ -222,6 +229,7 @@ type userPayload struct {
 	DisplayName *string `json:"displayName"`
 	Role        *string `json:"role"`
 	Disabled    *bool   `json:"disabled"`
+	ReaderEmail *string `json:"readerEmail"`
 }
 
 func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +253,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		s.authAdminError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"user": userJSON(u)})
+	writeJSON(w, map[string]any{"user": s.adminUserJSON(r, u)})
 }
 
 func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
@@ -259,16 +267,31 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	var readerEmail *string
+	if req.ReaderEmail != nil {
+		email, ok := normalizeReaderEmail(*req.ReaderEmail)
+		if !ok {
+			http.Error(w, "invalid reader email", http.StatusBadRequest)
+			return
+		}
+		readerEmail = &email
+	}
 	if err := s.users.UpdateUser(r.Context(), id, req.Password, req.DisplayName, req.Role, req.Disabled); err != nil {
 		s.authAdminError(w, err)
 		return
+	}
+	if readerEmail != nil {
+		if err := s.setReaderEmail(r.Context(), id, *readerEmail); err != nil {
+			s.apiError(w, err)
+			return
+		}
 	}
 	u, err := s.users.GetByID(r.Context(), id)
 	if err != nil {
 		s.apiError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"user": userJSON(u)})
+	writeJSON(w, map[string]any{"user": s.adminUserJSON(r, u)})
 }
 
 func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {

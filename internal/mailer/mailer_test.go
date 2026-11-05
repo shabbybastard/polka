@@ -89,6 +89,23 @@ func TestSendWithAttachment(t *testing.T) {
 	}
 }
 
+func TestAttachmentHeaders(t *testing.T) {
+	cfg := Config{From: "lib@polka.test"}
+	msg := string(cfg.build("kindle@example.com", "Война и мир", "hi", "Война и мир.epub", []byte("BOOKDATA")))
+
+	for _, want := range []string{
+		"Content-Type: application/epub+zip; name=\"book.epub\"; name*=utf-8''%D0%92%D0%BE%D0%B9%D0%BD%D0%B0",
+		"Content-Disposition: attachment; filename=\"book.epub\"; filename*=utf-8''%D0%92%D0%BE%D0%B9%D0%BD%D0%B0",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message missing %q\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, `name="Война`) || strings.Contains(msg, `filename="Война`) {
+		t.Error("raw non-ASCII name leaked into quoted headers")
+	}
+}
+
 func splitHostPort(addr string) (string, int) {
 	h, p, _ := net.SplitHostPort(addr)
 	port := 0

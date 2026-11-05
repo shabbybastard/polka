@@ -160,7 +160,11 @@ a.tag:hover {
   gap: 10px;
 }
 
-.book-page__actions-row .btn {
+.book-page__actions-row > .btn,
+.book-page__send-wrap > .btn,
+.book-page__actions-row > .lists-menu > .btn {
+  width: var(--book-action-width, auto);
+  flex: 0 0 var(--book-action-width, auto);
   height: 40px;
   min-height: 40px;
   padding: 0 16px;
@@ -168,8 +172,23 @@ a.tag:hover {
   white-space: nowrap;
 }
 
+.book-page__send-wrap,
+.book-page__actions-row .lists-menu {
+  display: inline-flex;
+  flex: 0 0 var(--book-action-width, auto);
+}
+
+.book-page__send-wrap .btn {
+  width: var(--book-action-width, auto);
+}
+
 .book-page__actions-row--tools {
   margin-top: 2px;
+}
+
+.book-page__actions .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .book-page__annotation {
@@ -304,9 +323,22 @@ a.tag:hover {
     gap: 8px;
   }
 
-  .book-page__actions-row .btn {
+  .book-page__actions-row > .btn,
+  .book-page__send-wrap > .btn,
+  .book-page__actions-row > .lists-menu > .btn {
     flex: 1 1 auto;
+    width: auto;
     text-align: center;
+  }
+
+  .book-page__send-wrap,
+  .book-page__actions-row .lists-menu {
+    flex: 1 1 auto;
+  }
+
+  .book-page__send-wrap .btn,
+  .book-page__actions-row .lists-menu > .btn {
+    width: 100%;
   }
 
   .book-page__ratings {

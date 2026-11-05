@@ -13,6 +13,15 @@ import (
 // (0600). It encrypts secrets at rest (the SMTP password) so they are not
 // stored in the database in clear text.
 func loadSecretKey(dataDir string) []byte {
+	// Tests and some embedded configurations have no data directory. Keep
+	// the key in memory then; never create a stray secret.key in the CWD.
+	if dataDir == "" {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return nil
+		}
+		return key
+	}
 	path := filepath.Join(dataDir, "secret.key")
 	if b, err := os.ReadFile(path); err == nil && len(b) == 32 {
 		return b

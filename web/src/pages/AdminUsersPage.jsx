@@ -5,6 +5,40 @@ import "./AdminUsersPage.css";
 
 const emptyForm = { login: "", password: "", displayName: "", role: "user" };
 
+const ReaderEmailCell = ({ user, onSave }) => {
+  const [value, setValue] = useState(user.readerEmail ?? "");
+
+  useEffect(() => {
+    setValue(user.readerEmail ?? "");
+  }, [user.readerEmail]);
+
+  const commit = () => {
+    const next = value.trim();
+    if (next === (user.readerEmail ?? "")) return;
+    onSave(user, next).catch(() => setValue(user.readerEmail ?? ""));
+  };
+
+  return (
+    <input
+      type="email"
+      className="users-table__email"
+      aria-label={t("users.readerEmail")}
+      placeholder={t("users.readerEmailPh")}
+      value={value}
+      autoComplete="off"
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+};
+
 const AdminUsersPage = ({ me }) => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,6 +58,8 @@ const AdminUsersPage = ({ me }) => {
   const showError = (err) => {
     if (err.status === 409) {
       alert(String(err.message).includes("admin") ? t("users.lastAdmin") : t("users.loginTaken"));
+    } else if (err.status === 400) {
+      alert(t("users.emailInvalid"));
     } else {
       alert(t("users.opFail"));
     }
@@ -47,6 +83,14 @@ const AdminUsersPage = ({ me }) => {
 
   const toggleDisabled = (u) =>
     updateUser(u.id, { disabled: !u.disabled }).then(reload).catch(showError);
+
+  const saveReaderEmail = (u, readerEmail) =>
+    updateUser(u.id, { readerEmail })
+      .then(reload)
+      .catch((err) => {
+        showError(err);
+        throw err;
+      });
 
   const resetPassword = (u) => {
     const password = prompt(t("users.passwordPrompt", { login: u.login }));
@@ -92,6 +136,7 @@ const AdminUsersPage = ({ me }) => {
               <th>{t("users.name")}</th>
               <th>{t("users.role")}</th>
               <th>{t("users.status")}</th>
+              <th>{t("users.readerEmail")}</th>
               <th aria-label="actions" />
             </tr>
           </thead>
@@ -106,22 +151,27 @@ const AdminUsersPage = ({ me }) => {
                   </span>
                 </td>
                 <td>{u.disabled ? t("users.disabled") : t("users.active")}</td>
-                <td className="users-table__actions">
-                  <button type="button" className="btn btn-link" onClick={() => rename(u)}>
-                    {t("users.rename")}
-                  </button>
-                  <button type="button" className="btn btn-link" onClick={() => resetPassword(u)}>
-                    {t("users.password")}
-                  </button>
-                  <button type="button" className="btn btn-link" onClick={() => toggleRole(u)}>
-                    {u.role === "admin" ? t("users.makeReader") : t("users.makeAdmin")}
-                  </button>
-                  <button type="button" className="btn btn-link" onClick={() => toggleDisabled(u)}>
-                    {u.disabled ? t("users.enable") : t("users.disable")}
-                  </button>
-                  <button type="button" className="btn btn-link users-table__danger" onClick={() => remove(u)}>
-                    {t("users.delete")}
-                  </button>
+                <td>
+                  <ReaderEmailCell user={u} onSave={saveReaderEmail} />
+                </td>
+                <td className="users-table__actions-cell">
+                  <div className="users-table__actions">
+                    <button type="button" className="btn btn-link" onClick={() => rename(u)}>
+                      {t("users.rename")}
+                    </button>
+                    <button type="button" className="btn btn-link" onClick={() => resetPassword(u)}>
+                      {t("users.password")}
+                    </button>
+                    <button type="button" className="btn btn-link" onClick={() => toggleRole(u)}>
+                      {u.role === "admin" ? t("users.makeReader") : t("users.makeAdmin")}
+                    </button>
+                    <button type="button" className="btn btn-link" onClick={() => toggleDisabled(u)}>
+                      {u.disabled ? t("users.enable") : t("users.disable")}
+                    </button>
+                    <button type="button" className="btn btn-link users-table__danger" onClick={() => remove(u)}>
+                      {t("users.delete")}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

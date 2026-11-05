@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
+	"net/textproto"
 	"strconv"
 	"strings"
 
@@ -14,7 +18,14 @@ import (
 // Sending a book to an e-reader by e-mail (send-to-Kindle and friends):
 // the admin configures SMTP, each user has their own reader address.
 
-const maxSendBytes = 25 << 20 // attachment cap
+const (
+	// 14 MiB is the safe whole-message limit used by Kindle and most
+	// e-reader gateways. The setting can lower or raise it for a specific
+	// provider; the attachment budget is derived from it below.
+	defaultSMTPMaxMessageBytes = 14 << 20
+	smtpHeaderAllowance        = 64 << 10 // headers, MIME boundaries, body
+	smtpBase64Expansion        = 1.37     // base64 + CRLF line breaks
+)
 
 // smtpConfig reads the SMTP settings (the password is decrypted).
 func (s *Server) smtpConfig(r *http.Request) mailer.Config {
@@ -39,9 +50,50 @@ func (s *Server) smtpEnabled(r *http.Request) bool {
 	return s.users.GetSetting(r.Context(), "smtp.enabled", "0") == "1" && s.smtpConfig(r).Valid()
 }
 
+// smtpMaxMessageBytes returns the configured whole-message limit. An empty
+// or invalid setting falls back to 14 MiB.
+func (s *Server) smtpMaxMessageBytes(r *http.Request) int64 {
+	raw := s.users.GetSetting(r.Context(), "smtp.max_message_bytes", "")
+	if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	return defaultSMTPMaxMessageBytes
+}
+
+// smtpMaxAttachmentBytes reserves 64 KiB for the MIME envelope and accounts
+// for base64 expansion, so the final message stays under the SMTP limit.
+func smtpMaxAttachmentBytes(maxMessage int64) int64 {
+	if maxMessage <= smtpHeaderAllowance {
+		return 0
+	}
+	return int64(float64(maxMessage-smtpHeaderAllowance) / smtpBase64Expansion)
+}
+
+func (s *Server) smtpMaxAttachmentBytes(r *http.Request) int64 {
+	return smtpMaxAttachmentBytes(s.smtpMaxMessageBytes(r))
+}
+
+// normalizeReaderEmail validates an e-reader address with net/mail. An empty
+// value is allowed and means "clear the address".
+func normalizeReaderEmail(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", true
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return "", false
+	}
+	return addr.Address, true
+}
+
 // readerEmail — the user's personal e-reader address.
 func (s *Server) readerEmail(r *http.Request, userID int64) string {
 	return s.users.GetSetting(r.Context(), fmt.Sprintf("reader_email:%d", userID), "")
+}
+
+func (s *Server) setReaderEmail(ctx context.Context, userID int64, email string) error {
+	return s.users.SetSetting(ctx, fmt.Sprintf("reader_email:%d", userID), email)
 }
 
 // GET/POST /api/v1/me/reader-email — the current user's reader address.
@@ -59,19 +111,21 @@ func (s *Server) handleReaderEmail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		email := strings.TrimSpace(req.Email)
-		if email != "" && !strings.Contains(email, "@") {
+		email, ok := normalizeReaderEmail(req.Email)
+		if !ok {
 			http.Error(w, "invalid email", http.StatusBadRequest)
 			return
 		}
-		if err := s.users.SetSetting(r.Context(), fmt.Sprintf("reader_email:%d", u.ID), email); err != nil {
+		if err := s.setReaderEmail(r.Context(), u.ID, email); err != nil {
 			s.apiError(w, err)
 			return
 		}
 	}
 	writeJSON(w, map[string]any{
-		"email":     s.readerEmail(r, u.ID),
-		"smtpReady": s.smtpEnabled(r),
+		"email":              s.readerEmail(r, u.ID),
+		"smtpReady":          s.smtpEnabled(r),
+		"maxMessageBytes":    s.smtpMaxMessageBytes(r),
+		"maxAttachmentBytes": s.smtpMaxAttachmentBytes(r),
 	})
 }
 
@@ -107,13 +161,18 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rc.Close()
-	if size > maxSendBytes {
+	maxAttachment := s.smtpMaxAttachmentBytes(r)
+	if maxAttachment <= 0 || size > maxAttachment {
 		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(rc, maxSendBytes))
+	data, err := io.ReadAll(io.LimitReader(rc, maxAttachment+1))
 	if err != nil {
 		s.apiError(w, err)
+		return
+	}
+	if int64(len(data)) > maxAttachment {
+		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -126,11 +185,25 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 	cfg := s.smtpConfig(r)
 	if err := cfg.Send(to, title, "Polka — "+title, name, data); err != nil {
 		s.log.Warn("send book", "book", bookID, "error", err)
+		if isSMTPTooLarge(err) {
+			http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "could not send the book", http.StatusBadGateway)
 		return
 	}
 	s.log.Info("book sent", "book", bookID, "to", to)
 	writeJSON(w, map[string]any{"sent": true})
+}
+
+// isSMTPTooLarge maps a server-side 552 ("message size exceeds fixed
+// maximum") to the HTTP 413 we return for oversized books.
+func isSMTPTooLarge(err error) bool {
+	var protoErr *textproto.Error
+	if errors.As(err, &protoErr) && protoErr.Code == 552 {
+		return true
+	}
+	return strings.Contains(err.Error(), "552")
 }
 
 // POST /admin/smtp/test — verify the SMTP connection (admin only).
@@ -143,27 +216,31 @@ func (s *Server) handleSmtpTest(w http.ResponseWriter, r *http.Request) {
 }
 
 type smtpInput struct {
-	Enabled  *bool   `json:"enabled"`
-	Host     *string `json:"host"`
-	Port     *int    `json:"port"`
-	User     *string `json:"user"`
-	Password *string `json:"password"` // empty string = leave unchanged
-	From     *string `json:"from"`
-	Security *string `json:"security"`
+	Enabled         *bool   `json:"enabled"`
+	Host            *string `json:"host"`
+	Port            *int    `json:"port"`
+	User            *string `json:"user"`
+	Password        *string `json:"password"` // empty string = leave unchanged
+	From            *string `json:"from"`
+	Security        *string `json:"security"`
+	MaxMessageBytes *int64  `json:"maxMessageBytes"`
 }
 
 // smtpSettings — config for the admin panel (no password, just a "set" flag).
 func (s *Server) smtpSettings(r *http.Request) map[string]any {
 	ctx := r.Context()
 	get := func(k string) string { return s.users.GetSetting(ctx, "smtp."+k, "") }
+	maxMessage := s.smtpMaxMessageBytes(r)
 	return map[string]any{
-		"enabled":     get("enabled") == "1",
-		"host":        get("host"),
-		"port":        get("port"),
-		"user":        get("user"),
-		"from":        get("from"),
-		"security":    get("security"),
-		"hasPassword": get("password") != "",
+		"enabled":            get("enabled") == "1",
+		"host":               get("host"),
+		"port":               get("port"),
+		"user":               get("user"),
+		"from":               get("from"),
+		"security":           get("security"),
+		"hasPassword":        get("password") != "",
+		"maxMessageBytes":    maxMessage,
+		"maxAttachmentBytes": smtpMaxAttachmentBytes(maxMessage),
 	}
 }
 
@@ -201,6 +278,15 @@ func (s *Server) saveSmtpSettings(r *http.Request, in smtpInput) error {
 	}
 	if in.Security != nil {
 		if err := set("security", *in.Security); err != nil {
+			return err
+		}
+	}
+	if in.MaxMessageBytes != nil {
+		v := *in.MaxMessageBytes
+		if v <= 0 {
+			v = 0
+		}
+		if err := set("max_message_bytes", strconv.FormatInt(v, 10)); err != nil {
 			return err
 		}
 	}

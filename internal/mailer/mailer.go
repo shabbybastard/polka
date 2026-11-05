@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime"
 	"net/smtp"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -135,10 +136,13 @@ func (c Config) build(to, subject, body, attachName string, attach []byte) []byt
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
 	b.WriteString(body + "\r\n\r\n")
 
+	name := filepath.Base(attachName)
+	fallback := asciiFallback(name)
+	encoded := percentEncodeParam(name)
 	fmt.Fprintf(&b, "--%s\r\n", boundary)
-	fmt.Fprintf(&b, "Content-Type: application/octet-stream; name=%q\r\n", attachName)
+	fmt.Fprintf(&b, "Content-Type: %s; name=%q; name*=utf-8''%s\r\n", attachmentContentType(name), fallback, encoded)
 	b.WriteString("Content-Transfer-Encoding: base64\r\n")
-	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q\r\n\r\n", attachName)
+	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q; filename*=utf-8''%s\r\n\r\n", fallback, encoded)
 	enc64 := base64.StdEncoding.EncodeToString(attach)
 	for i := 0; i < len(enc64); i += 76 {
 		end := i + 76
@@ -149,4 +153,70 @@ func (c Config) build(to, subject, body, attachName string, attach []byte) []byt
 	}
 	fmt.Fprintf(&b, "\r\n--%s--\r\n", boundary)
 	return []byte(b.String())
+}
+
+// attachmentContentType returns a real MIME type for the attachment instead
+// of the generic application/octet-stream. Explicit mappings matter for
+// e-readers: Kindle accepts EPUB only when it is labelled as such.
+func attachmentContentType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".epub":
+		return "application/epub+zip"
+	case ".fb2":
+		return "application/x-fictionbook+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".djvu":
+		return "image/vnd.djvu"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".mobi":
+		return "application/x-mobipocket-ebook"
+	case ".azw3":
+		return "application/vnd.amazon.ebook"
+	case ".zip":
+		return "application/zip"
+	}
+	if typ := mime.TypeByExtension(filepath.Ext(name)); typ != "" {
+		return typ
+	}
+	return "application/octet-stream"
+}
+
+// asciiFallback keeps old mail clients happy: non-ASCII names are replaced
+// with a safe generic name, while modern clients use the RFC 2231 parameter.
+func asciiFallback(name string) string {
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if stem == "" {
+		return "book" + ext
+	}
+	for _, r := range stem {
+		safe := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' || r == ' ' || r == '_' || r == '-' ||
+			r == '.' || r == '(' || r == ')'
+		if !safe {
+			return "book" + ext
+		}
+	}
+	return name
+}
+
+// percentEncodeParam implements RFC 2231/5987 attribute encoding. Spaces are
+// %20 (not '+'), and only attr-char characters stay unescaped.
+func percentEncodeParam(value string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || strings.ContainsRune("!#$&+-.^_`|~", rune(c)) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
 }

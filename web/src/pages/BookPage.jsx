@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/api";
 import RatingStars from "../components/RatingStars";
@@ -87,7 +87,9 @@ const BookPage = ({ user, sync }) => {
   const [forgetExternalBusy, setForgetExternalBusy] = useState(false);
   const [smtpReady, setSmtpReady] = useState(false);
   const [readerEmail, setReaderEmailState] = useState("");
+  const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(null);
   const [sendState, setSendState] = useState("idle");
+  const actionsRef = useRef(null);
   const [polkaRating, setPolkaRating] = useState(null); // {rating, count}
   const [userRating, setUserRating] = useState(0);
   const [ratingBusy, setRatingBusy] = useState(false);
@@ -323,6 +325,8 @@ const BookPage = ({ user, sync }) => {
         if (cancelled) return;
         setSmtpReady(Boolean(res?.smtpReady));
         setReaderEmailState(res?.email ?? "");
+        const maxAttachment = Number(res?.maxAttachmentBytes);
+        setMaxAttachmentBytes(Number.isFinite(maxAttachment) ? maxAttachment : null);
       })
       .catch(() => {});
     import("../api/lists").then(({ fetchLists }) =>
@@ -436,6 +440,22 @@ const BookPage = ({ user, sync }) => {
       .join("; ");
   }, [data]);
 
+  // Equal-size action buttons: measure the widest natural label and use it
+  // as a shared width for every button on the page.
+  useLayoutEffect(() => {
+    const root = actionsRef.current;
+    if (!root) return;
+    let widest = 0;
+    root
+      .querySelectorAll(
+        ".book-page__actions-row > .btn, .book-page__send-wrap > .btn, .book-page__actions-row > .lists-menu > .btn"
+      )
+      .forEach((el) => {
+        widest = Math.max(widest, el.scrollWidth);
+      });
+    if (widest > 0) root.style.setProperty("--book-action-width", `${Math.ceil(widest) + 4}px`);
+  });
+
   if (loading) {
     return (
       <div className="container book-page">
@@ -470,6 +490,7 @@ const BookPage = ({ user, sync }) => {
   const canRead = [".fb2", ".txt", ".pdf", ".epub"].includes(Ext);
   const canCompact = [".fb2", ".epub"].includes(Ext);
   const isEpub = Ext === ".epub";
+  const sendTooLarge = maxAttachmentBytes !== null && Number(BookSize) > maxAttachmentBytes;
   const compactLabel = Ext === ".epub" ? t("book.downloadText") : t("book.downloadCompact", { ext: Ext });
 
   const initials = (Title || "").trim().slice(0, 2).toUpperCase();
@@ -625,8 +646,8 @@ const BookPage = ({ user, sync }) => {
             )
           )}
 
-          <div className="book-page__actions">
-            <div className="book-page__actions-row">
+          <div className="book-page__actions" ref={actionsRef}>
+            <div className="book-page__actions-row book-page__actions-row--primary">
               {canRead && (
                 <Link className="btn btn-primary" to={`/read/${BookID}`}>
                   {readProgress > 0
@@ -634,43 +655,41 @@ const BookPage = ({ user, sync }) => {
                     : t("book.read")}
                 </Link>
               )}
-              <a className="btn btn-ghost" href={api.fb2Url(BookID)}>
-                {t("book.download", { ext: Ext || ".fb2" })}
-              </a>
-              <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
-                {t("book.downloadZip")}
-              </a>
-              {canCompact && (
-                <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>
-                  {compactLabel}
-                </a>
-              )}
-            </div>
-
-            <div className="book-page__actions-row">
-              <button
-                type="button"
-                className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
-                onClick={flipWishlist}
-                disabled={wishBusy}
-                title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}
-              >
-                {inWishlist ? t("book.wished") : t("book.wish")}
-              </button>
-              <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
               {smtpReady && (
+                <span
+                  className="book-page__send-wrap"
+                  title={
+                    sendTooLarge
+                      ? t("book.send.tooLarge", {
+                          size: maxAttachmentBytes > 0 ? formatBytes(maxAttachmentBytes) : "0",
+                        })
+                      : undefined
+                  }
+                >
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={sendToReader}
+                    disabled={sendState === "sending" || sendTooLarge}
+                    title={sendTooLarge ? undefined : t("book.send.hint")}
+                  >
+                    {sendState === "sent"
+                      ? t("book.send.done")
+                      : sendState === "sending"
+                        ? t("book.send.sending")
+                        : t("book.send")}
+                  </button>
+                </span>
+              )}
+              {readProgress > 0 && (
                 <button
                   type="button"
-                  className="btn btn-ghost"
-                  onClick={sendToReader}
-                  disabled={sendState === "sending"}
-                  title={t("book.send.hint")}
+                  className="btn btn-ghost book-page__forget"
+                  onClick={forgetProgress}
+                  disabled={forgetBusy}
+                  title={t("book.forgetHint")}
                 >
-                  {sendState === "sent"
-                    ? t("book.send.done")
-                    : sendState === "sending"
-                      ? t("book.send.sending")
-                      : t("book.send")}
+                  {t("book.forget")}
                 </button>
               )}
               {sync && (
@@ -686,38 +705,50 @@ const BookPage = ({ user, sync }) => {
               )}
             </div>
 
-            {(readProgress > 0 || user?.role === "admin") && (
+            <div className="book-page__actions-row book-page__actions-row--lists">
+              <button
+                type="button"
+                className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
+                onClick={flipWishlist}
+                disabled={wishBusy}
+                title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}
+              >
+                {inWishlist ? t("book.wished") : t("book.wish")}
+              </button>
+              <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
+            </div>
+
+            <div className="book-page__actions-row book-page__actions-row--downloads">
+              <a className="btn btn-ghost" href={api.fb2Url(BookID)}>
+                {t("book.download", { ext: Ext || ".fb2" })}
+              </a>
+              <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
+                {t("book.downloadZip")}
+              </a>
+              {canCompact && (
+                <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>
+                  {compactLabel}
+                </a>
+              )}
+            </div>
+
+            {user?.role === "admin" && (
               <div className="book-page__actions-row book-page__actions-row--tools">
-                {readProgress > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost book-page__forget"
-                    onClick={forgetProgress}
-                    disabled={forgetBusy}
-                    title={t("book.forgetHint")}
-                  >
-                    {t("book.forget")}
-                  </button>
-                )}
-                {user?.role === "admin" && (
-                  <>
-                    <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
-                      {t("book.edit")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost book-page__forget-external"
-                      onClick={forgetExternal}
-                      disabled={forgetExternalBusy}
-                      title={t("book.forgetExternalHint")}
-                    >
-                      {forgetExternalBusy ? "…" : t("book.forgetExternal")}
-                    </button>
-                    <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
-                      {t("book.delete")}
-                    </button>
-                  </>
-                )}
+                <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
+                  {t("book.edit")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost book-page__forget-external"
+                  onClick={forgetExternal}
+                  disabled={forgetExternalBusy}
+                  title={t("book.forgetExternalHint")}
+                >
+                  {forgetExternalBusy ? "…" : t("book.forgetExternal")}
+                </button>
+                <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
+                  {t("book.delete")}
+                </button>
               </div>
             )}
           </div>

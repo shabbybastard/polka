@@ -9,3 +9,6 @@ android/app/build/
 android/.gradle/
 android/app/libs/*.aar
 android/app/libs/*.jar
+
+# Per-installation secret lives in data-dir/secret.key
+internal/server/secret.key

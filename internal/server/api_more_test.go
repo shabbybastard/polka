@@ -310,18 +310,40 @@ func TestUserUpdate(t *testing.T) {
 		switch m["login"] {
 		case "reader":
 			readerID = itoa64(int64(m["id"].(float64)))
+			if _, ok := m["readerEmail"]; !ok {
+				t.Error("admin user list is missing readerEmail")
+			}
 		case "admin":
 			adminID = itoa64(int64(m["id"].(float64)))
 		}
 	}
 
-	resp := postJSON(t, f.admin, f.ts.URL+"/admin/users/"+readerID, map[string]any{"displayName": "Новое имя", "role": auth.RoleAdmin})
+	resp := postJSON(t, f.admin, f.ts.URL+"/admin/users/"+readerID, map[string]any{
+		"displayName": "Новое имя", "role": auth.RoleAdmin, "readerEmail": "reader@kindle.com",
+	})
 	var upd struct {
 		User map[string]any `json:"user"`
 	}
 	decode(t, resp, &upd)
-	if upd.User["displayName"] != "Новое имя" || upd.User["role"] != auth.RoleAdmin {
+	if upd.User["displayName"] != "Новое имя" || upd.User["role"] != auth.RoleAdmin || upd.User["readerEmail"] != "reader@kindle.com" {
 		t.Errorf("update: %v", upd.User)
+	}
+	for _, u := range getJSONWith(t, f.admin, f.ts.URL+"/admin/users")["users"].([]any) {
+		m := u.(map[string]any)
+		if m["id"].(float64) == upd.User["id"].(float64) && m["readerEmail"] != "reader@kindle.com" {
+			t.Errorf("admin list reader email = %v", m["readerEmail"])
+		}
+	}
+	if got := code(t, f.admin, "POST", f.ts.URL+"/admin/users/"+readerID, `{"readerEmail":"not-an-email"}`); got != http.StatusBadRequest {
+		t.Errorf("invalid reader email -> %d, want 400", got)
+	}
+	// An empty value clears the address.
+	postJSON(t, f.admin, f.ts.URL+"/admin/users/"+readerID, map[string]any{"readerEmail": ""}).Body.Close()
+	for _, u := range getJSONWith(t, f.admin, f.ts.URL+"/admin/users")["users"].([]any) {
+		m := u.(map[string]any)
+		if m["id"].(float64) == upd.User["id"].(float64) && m["readerEmail"] != "" {
+			t.Errorf("reader email was not cleared: %v", m["readerEmail"])
+		}
 	}
 	// Now the reader is an admin too and may be demoted back.
 	postJSON(t, f.admin, f.ts.URL+"/admin/users/"+readerID, map[string]any{"role": auth.RoleUser}).Body.Close()

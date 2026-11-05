@@ -787,6 +787,24 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                 onChange={(e) => setSmtpPwd(e.target.value)}
               />
               <input placeholder={t("admin.smtp.from")} value={smtp.from || ""} onChange={(e) => smtpField("from", e.target.value)} />
+              <input
+                type="number"
+                min="1"
+                step="1"
+                aria-label={t("admin.smtp.maxMessageMiB")}
+                title={t("admin.smtp.maxMessageMiB")}
+                placeholder={t("admin.smtp.maxMessageMiB")}
+                value={
+                  smtp.maxMessageBytes
+                    ? Math.round(Number(smtp.maxMessageBytes) / (1024 * 1024))
+                    : ""
+                }
+                onChange={(e) => {
+                  const mib = Number(e.target.value);
+                  smtpField("maxMessageBytes", mib > 0 ? Math.round(mib * 1024 * 1024) : 0);
+                }}
+                style={{ maxWidth: 160 }}
+              />
             </div>
             <div className="library-admin__key-row">
               <button type="button" className="btn btn-primary" onClick={saveSmtp}>{t("admin.smtp.save")}</button>
