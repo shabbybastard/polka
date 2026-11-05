@@ -97,6 +97,7 @@ func newTestProvider(t *testing.T, livelibOK, googleOK, openlibOK bool) *Provide
 	p.LiveLibBase = ll.URL
 	p.GoogleBase = gb.URL
 	p.OpenLibraryBase = ol.URL
+	p.SetGoogleAPIKey("test-key")
 	return p
 }
 
@@ -261,6 +262,48 @@ func TestLiveLibNoConfidentMatch(t *testing.T) {
 	}
 }
 
+func TestGoogleBooksUsesAPIKey(t *testing.T) {
+	var gotKey string
+	gb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.URL.Query().Get("key")
+		w.Write([]byte(googleJSON))
+	}))
+	defer gb.Close()
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.GoogleBase = gb.URL
+	p.SetGoogleAPIKey("secret-key")
+	res := p.Get(context.Background(), "google-key", "Мастер и Маргарита", "Булгаков",
+		map[string]bool{SourceGoogleBooks: true}, nil)
+	if res.Primary == nil || res.Primary.Source != SourceGoogleBooks {
+		t.Fatalf("google result: %+v", res)
+	}
+	if gotKey != "secret-key" {
+		t.Errorf("google key = %q", gotKey)
+	}
+}
+
+func TestGoogleBooksSkippedWithoutKey(t *testing.T) {
+	var hits int
+	gb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Write([]byte(googleJSON))
+	}))
+	defer gb.Close()
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.GoogleBase = gb.URL
+	p.SetGoogleAPIKey("")
+	res := p.Get(context.Background(), "google-no-key", "Мастер и Маргарита", "Булгаков",
+		map[string]bool{SourceGoogleBooks: true}, nil)
+	if hits != 0 {
+		t.Errorf("google was queried without a key: %d", hits)
+	}
+	if !res.Negative {
+		t.Errorf("expected negative result: %+v", res)
+	}
+}
+
 func TestEnrichTransientNotCached(t *testing.T) {
 	p := newTestProvider(t, false, false, false)
 	res := p.Get(context.Background(), "3", "Книга", "", allEnabled(), allTagSources())
@@ -282,6 +325,7 @@ func TestEnrichCachePersistence(t *testing.T) {
 
 	// A new provider reads the cache from disk and does not hit the network.
 	p2 := New(cachePath)
+	p2.SetGoogleAPIKey("test-key")
 	p2.LiveLibBase = "http://127.0.0.1:1" // intentionally unreachable
 	res := p2.Get(context.Background(), "5", "Мастер и Маргарита", "", allEnabled(), allTagSources())
 	if res.Primary == nil || res.Primary.Rating != 4.5 {

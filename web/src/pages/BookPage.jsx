@@ -80,7 +80,6 @@ const BookPage = ({ user, sync }) => {
   const [error, setError] = useState(null);
   const [coverFailed, setCoverFailed] = useState(false);
   const [enrichment, setEnrichment] = useState(null);
-  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [similar, setSimilar] = useState(null); // {similar: [], external: []}
   const [readProgress, setReadProgress] = useState(0);
   const [forgetBusy, setForgetBusy] = useState(false);
@@ -370,7 +369,6 @@ const BookPage = ({ user, sync }) => {
   useEffect(() => {
     if (!data?.bookForm?.BookID) return undefined;
     let cancelled = false;
-    setEnrichmentLoading(true);
 
     const author = data.authors?.[0]
       ? [data.authors[0].LastName, data.authors[0].FirstName, data.authors[0].MiddleName]
@@ -409,8 +407,7 @@ const BookPage = ({ user, sync }) => {
             .catch(() => {});
         }
       })
-      .catch(() => !cancelled && setEnrichment(null))
-      .finally(() => !cancelled && setEnrichmentLoading(false));
+      .catch(() => !cancelled && setEnrichment(null));
 
     setSimilar(null);
     fetchSimilarBooks({
@@ -502,13 +499,10 @@ const BookPage = ({ user, sync }) => {
   };
 
   const primary = enrichment?.primary ?? null;
-  const externalRating = primary?.rating;
-  const externalRatingsCount = primary?.ratingsCount;
   const externalCoverUrl = primary?.coverUrl ?? enrichment?.coverUrl;
-  const externalInfoUrl = primary?.infoUrl;
-  const externalSource = primary ? (SOURCE_LABELS[primary.source] ?? primary.source) : t("book.rating.external");
-  const externalIsNegative = enrichment?.negative === true;
-  const extraSourceCount = enrichment?.extraSourceCount ?? 0;
+  const externalRatings = (enrichment?.sources ?? []).filter(
+    (source) => Number(source.rating) > 0
+  );
 
   return (
     <div className="container book-page">
@@ -588,42 +582,36 @@ const BookPage = ({ user, sync }) => {
                 <RateStars value={userRating} onRate={submitRating} disabled={ratingBusy} />
               </div>
             </div>
-            <div className="book-page__rating-block">
-              <span className="book-page__rating-source">{t("book.rating.lib")}</span>
-              {LibRate > 0 ? (
+            {LibRate > 0 && (
+              <div className="book-page__rating-block">
+                <span className="book-page__rating-source">{t("book.rating.lib")}</span>
                 <RatingStars value={LibRate} size="lg" />
-              ) : (
-                <span className="book-page__rating-empty">{t("book.rating.none")}</span>
-              )}
-            </div>
-            <div className="book-page__rating-block book-page__rating-block--external">
-              <span className="book-page__rating-source">
-                {externalInfoUrl ? (
-                  <a href={externalInfoUrl} target="_blank" rel="noreferrer">
-                    {externalSource}
-                  </a>
-                ) : (
-                  externalSource
-                )}
-              </span>
-              {enrichmentLoading ? (
-                <span className="book-page__rating-empty">…</span>
-              ) : externalRating > 0 ? (
-                <>
-                  <RatingStars value={externalRating} size="lg" max={5} />
-                  {externalRatingsCount > 0 && (
-                    <span className="book-page__rating-meta">
-                      {t("book.rating.count", { n: externalRatingsCount.toLocaleString() })}
-                      {extraSourceCount > 0 && t("book.rating.more", { n: extraSourceCount })}
-                    </span>
+              </div>
+            )}
+            {externalRatings.map((source) => (
+              <div
+                className="book-page__rating-block book-page__rating-block--external"
+                key={source.source}
+              >
+                <span className="book-page__rating-source">
+                  {source.infoUrl ? (
+                    <a href={source.infoUrl} target="_blank" rel="noreferrer">
+                      {SOURCE_LABELS[source.source] ?? source.source}
+                    </a>
+                  ) : (
+                    SOURCE_LABELS[source.source] ?? source.source
                   )}
-                </>
-              ) : (
-                <span className="book-page__rating-empty">
-                  {externalIsNegative ? t("book.rating.notFound") : t("book.rating.none")}
                 </span>
-              )}
-            </div>
+                <RatingStars value={source.rating} size="lg" max={5} />
+                {source.ratingsCount > 0 && (
+                  <span className="book-page__rating-meta">
+                    {t("book.rating.count", {
+                      n: Number(source.ratingsCount).toLocaleString(),
+                    })}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
 
           {data?.genresList?.length ? (

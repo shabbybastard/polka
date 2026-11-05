@@ -53,7 +53,9 @@ func (s *Server) handleGetEnrichment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tagSources := s.enabledTagSources(r.Context())
-	res := s.enrich.Get(r.Context(), bookID, title, author, s.enrichEnabled(r), tagSources)
+	enabled := s.enrichEnabled(r)
+	s.enrich.SetGoogleAPIKey(s.users.GetSetting(r.Context(), "enrich.google_api_key", ""))
+	res := s.enrich.Get(r.Context(), bookID, title, author, enabled, tagSources)
 	if id, err := strconv.ParseInt(bookID, 10, 64); err == nil {
 		for _, src := range res.Sources {
 			if len(src.Tags) == 0 {
@@ -66,7 +68,38 @@ func (s *Server) handleGetEnrichment(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, res)
+	writeJSON(w, s.enrichmentView(res, enabled))
+}
+
+// enrichmentView removes results from disabled rating sources and picks the
+// first enabled source with a rating as primary. Tag-only sources may still
+// contribute genres, but must not show a rating in the book page.
+func (s *Server) enrichmentView(res *enrich.Enrichment, enabled map[string]bool) *enrich.Enrichment {
+	view := *res
+	view.Sources = make([]enrich.Result, 0, len(res.Sources))
+	view.Primary = nil
+	view.CoverURL = ""
+	for _, src := range res.Sources {
+		if !enabled[src.Source] {
+			continue
+		}
+		view.Sources = append(view.Sources, src)
+		if view.CoverURL == "" {
+			view.CoverURL = src.CoverURL
+		}
+	}
+	for i := range view.Sources {
+		src := view.Sources[i]
+		if view.Primary == nil || (view.Primary.Rating <= 0 && src.Rating > 0) {
+			copy := src
+			view.Primary = &copy
+		}
+	}
+	view.ExtraSourceCount = len(view.Sources) - 1
+	if view.ExtraSourceCount < 0 {
+		view.ExtraSourceCount = 0
+	}
+	return &view
 }
 
 // POST /admin/books/{id}/forget-enrichment — remove external ratings, genres
@@ -101,10 +134,11 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 			"fantlab":   cfg.FantLab,
 			"tastedive": cfg.TasteDive,
 		},
-		"tastediveKey": cfg.TasteDiveKey,
-		"tagSources":   s.enabledTagSources(r.Context()),
-		"opdsEnabled":  s.opdsEnabled(r),
-		"homeHero":     s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
+		"tastediveKey":   cfg.TasteDiveKey,
+		"googleBooksKey": s.users.GetSetting(r.Context(), "enrich.google_api_key", ""),
+		"tagSources":     s.enabledTagSources(r.Context()),
+		"opdsEnabled":    s.opdsEnabled(r),
+		"homeHero":       s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
 		"convert": map[string]bool{
 			"fb2ToEpub":  s.users.GetSetting(r.Context(), "convert.fb2_to_epub", "0") == "1",
 			"keepSource": s.keepConversionSource(r.Context()),
@@ -135,14 +169,15 @@ func (s *Server) libraryStatus() map[string]any {
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Enrichment   map[string]bool `json:"enrichment"`
-		Similar      map[string]bool `json:"similar"`
-		TasteDiveKey *string         `json:"tastediveKey"`
-		TagSources   map[string]bool `json:"tagSources"`
-		TagsEnabled  *bool           `json:"tagsEnabled"` // legacy single switch
-		OpdsEnabled  *bool           `json:"opdsEnabled"`
-		HomeHero     *bool           `json:"homeHero"`
-		Convert      *struct {
+		Enrichment     map[string]bool `json:"enrichment"`
+		Similar        map[string]bool `json:"similar"`
+		TasteDiveKey   *string         `json:"tastediveKey"`
+		GoogleBooksKey *string         `json:"googleBooksKey"`
+		TagSources     map[string]bool `json:"tagSources"`
+		TagsEnabled    *bool           `json:"tagsEnabled"` // legacy single switch
+		OpdsEnabled    *bool           `json:"opdsEnabled"`
+		HomeHero       *bool           `json:"homeHero"`
+		Convert        *struct {
 			FB2ToEPUB  *bool `json:"fb2ToEpub"`
 			KeepSource *bool `json:"keepSource"`
 		} `json:"convert"`
@@ -180,6 +215,14 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 			s.apiError(w, err)
 			return
 		}
+	}
+	if req.GoogleBooksKey != nil {
+		key := strings.TrimSpace(*req.GoogleBooksKey)
+		if err := s.users.SetSetting(r.Context(), "enrich.google_api_key", key); err != nil {
+			s.apiError(w, err)
+			return
+		}
+		s.enrich.SetGoogleAPIKey(key)
 	}
 	if req.OpdsEnabled != nil {
 		if err := s.users.SetSetting(r.Context(), "opds.enabled", boolVal(*req.OpdsEnabled)); err != nil {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,49 @@ func TestExternalGenres(t *testing.T) {
 	}
 	if counts, _ = st.GenresWithCounts(ctx); !hasGenreSource(counts, "") {
 		t.Error("native genres were removed")
+	}
+}
+
+func TestExternalGenresSkipNativeDuplicates(t *testing.T) {
+	st, ids := newLibrary(t)
+	ctx := context.Background()
+	bookID := ids["Вишневый сад"] // native genre: dramaturgy
+
+	if err := st.SaveBookGenres(ctx, bookID, "livelib", []string{
+		"Драматургия", "Drama", "Роман", "роман!",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := st.GenresWithCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var external []string
+	for _, g := range counts {
+		if g.Source == "livelib" {
+			external = append(external, g.Name)
+		}
+	}
+	if len(external) != 1 || external[0] != "Роман" {
+		t.Errorf("external genres = %v, want only Роман", external)
+	}
+
+	details, err := st.BookDetails(ctx, bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasNative, hasRomance := false, false
+	for _, code := range details.Genres {
+		if code == "dramaturgy" {
+			hasNative = true
+		}
+		if strings.HasPrefix(code, "ext_livelib_") {
+			hasRomance = true
+		}
+	}
+	if !hasNative || !hasRomance {
+		t.Errorf("book genres = %v, native=%v romance=%v", details.Genres, hasNative, hasRomance)
 	}
 }
 

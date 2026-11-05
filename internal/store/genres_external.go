@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"unicode"
+
+	"github.com/vestigiumincaligne/polka/internal/genres"
 )
 
 // External genre sources (LiveLib, Open Library) are folded into the
@@ -16,6 +19,50 @@ import (
 func externalGenreCode(source, name string) string {
 	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(name))))
 	return "ext_" + source + "_" + hex.EncodeToString(sum[:])[:12]
+}
+
+// normalizeGenreName makes display names comparable regardless of case,
+// ё/е spelling, punctuation and repeated whitespace.
+func normalizeGenreName(name string) string {
+	name = strings.ToLower(strings.ReplaceAll(name, "ё", "е"))
+	var b strings.Builder
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// nativeGenreNames returns the display names of a book's native genres.
+// Standard FB2 codes are compared in both localizations because external
+// sources may return either Russian or English names.
+func nativeGenreNames(ctx context.Context, tx *sql.Tx, bookID int64) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT g.code, g.name
+		FROM book_genres bg
+		JOIN genres g ON g.id = bg.genre_id
+		WHERE bg.book_id = ? AND g.source = ''`, bookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var code, name string
+		if err := rows.Scan(&code, &name); err != nil {
+			return nil, err
+		}
+		for _, label := range []string{name, genres.NameLang(code, "ru"), genres.NameLang(code, "en")} {
+			if key := normalizeGenreName(label); key != "" {
+				out[key] = true
+			}
+		}
+	}
+	return out, rows.Err()
 }
 
 // SaveBookGenres replaces the genres a book received from one external
@@ -39,14 +86,19 @@ func (s *Store) SaveBookGenres(ctx context.Context, bookID int64, source string,
 		return err
 	}
 
+	native, err := nativeGenreNames(ctx, tx, bookID)
+	if err != nil {
+		return err
+	}
+
 	seen := map[string]bool{}
 	for _, raw := range names {
 		name := strings.TrimSpace(raw)
 		if name == "" || len([]rune(name)) > 80 {
 			continue
 		}
-		key := strings.ToLower(name)
-		if seen[key] {
+		key := normalizeGenreName(name)
+		if key == "" || native[key] || seen[key] {
 			continue
 		}
 		seen[key] = true

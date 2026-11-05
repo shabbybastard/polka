@@ -90,6 +90,18 @@
   margin: 4px 0 14px;
 }
 
+.library-admin__google-key {
+  margin-top: 12px;
+}
+
+.library-admin__google-key > .library-admin__source-name {
+  display: block;
+}
+
+.library-admin__google-key .library-admin__hint {
+  margin: 8px 0 0;
+}
+
 .library-admin__convert .library-admin__source {
   flex-wrap: wrap;
   padding: 6px 10px;

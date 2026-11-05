@@ -5,6 +5,8 @@ package enrich
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,7 +41,7 @@ const (
 	blockedBackoff = time.Hour
 
 	// Bump this when the parser or the cached result shape changes.
-	cacheVersion = 2
+	cacheVersion = 3
 )
 
 // Sources lists all sources in priority order.
@@ -68,8 +70,14 @@ type cacheEntry struct {
 	FetchedAt time.Time   `json:"fetchedAt"`
 	// TagKey lists the tag sources used for this entry. Changing the
 	// administrator's per-source toggles invalidates the cached tags.
-	TagKey  string `json:"tagKey,omitempty"`
-	Version int    `json:"version,omitempty"`
+	TagKey string `json:"tagKey,omitempty"`
+	// SourceKey lists the rating sources enabled for this entry, so
+	// toggling a source does not keep serving stale source lists.
+	SourceKey string `json:"sourceKey,omitempty"`
+	// GoogleKey changes when the Google Books API key is replaced, making
+	// old empty Google results re-fetch automatically.
+	GoogleKey string `json:"googleKey,omitempty"`
+	Version   int    `json:"version,omitempty"`
 }
 
 type Provider struct {
@@ -83,6 +91,8 @@ type Provider struct {
 
 	throttleMu  sync.Mutex
 	lastRequest map[string]time.Time
+
+	googleAPIKey string // guarded by mu
 
 	// Base URLs are overridden in tests.
 	LiveLibBase     string
@@ -139,6 +149,43 @@ func tagSourcesKey(tagSources map[string]bool) string {
 	return strings.Join(keys, ",")
 }
 
+func enabledSourcesKey(enabled map[string]bool) string {
+	var keys []string
+	for _, source := range Sources {
+		if enabled[source] {
+			keys = append(keys, source)
+		}
+	}
+	return strings.Join(keys, ",")
+}
+
+func googleKeyTag(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:8])
+}
+
+// SetGoogleAPIKey updates the key used for Google Books queries. Changing it
+// also clears a previous Google backoff so the new key is tried immediately.
+func (p *Provider) SetGoogleAPIKey(key string) {
+	key = strings.TrimSpace(key)
+	p.mu.Lock()
+	if p.googleAPIKey != key {
+		p.googleAPIKey = key
+		delete(p.backoff, SourceGoogleBooks)
+	}
+	p.mu.Unlock()
+}
+
+func (p *Provider) googleAPIKeyValue() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.googleAPIKey
+}
+
 // Get returns book enrichment for interactive use without throttling.
 func (p *Provider) Get(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
 	return p.getEnrichment(ctx, key, title, author, enabled, tagSources, false)
@@ -171,13 +218,16 @@ func (p *Provider) ForgetBook(bookID string) {
 
 func (p *Provider) getEnrichment(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool, throttle bool) *Enrichment {
 	tagKey := tagSourcesKey(tagSources)
+	sourceKey := enabledSourcesKey(enabled)
+	googleKey := googleKeyTag(p.googleAPIKeyValue())
 	p.mu.Lock()
 	if e, ok := p.cache[key]; ok {
 		ttl := successTTL
 		if e.Result.Negative {
 			ttl = negativeTTL
 		}
-		if e.Version == cacheVersion && time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
+		if e.Version == cacheVersion && e.SourceKey == sourceKey && e.GoogleKey == googleKey &&
+			time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
 			p.mu.Unlock()
 			if tagKey == "" && len(e.Result.Tags) > 0 {
 				// Do not leak tags through a cache entry when the
@@ -197,6 +247,11 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 		// A source may be enabled only for genre tags while its rating
 		// switch is off.
 		if !enabled[source] && !tagSources[source] {
+			continue
+		}
+		if source == SourceGoogleBooks && googleKey == "" {
+			// Google Books rejects unauthenticated traffic with 429, so
+			// do not waste a request (and a backoff) without a key.
 			continue
 		}
 		p.mu.Lock()
@@ -224,7 +279,9 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 		transientOnly = false
 		if r != nil {
 			res.Sources = append(res.Sources, *r)
-			if res.Primary == nil {
+			// Prefer a source that actually has a rating as the primary
+			// result; a tag-only source must not hide another rating.
+			if res.Primary == nil || (res.Primary.Rating <= 0 && r.Rating > 0) {
 				res.Primary = r
 			}
 			if res.CoverURL == "" {
@@ -247,7 +304,10 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 	}
 
 	p.mu.Lock()
-	p.cache[key] = cacheEntry{Result: res, FetchedAt: time.Now(), TagKey: tagKey, Version: cacheVersion}
+	p.cache[key] = cacheEntry{
+		Result: res, FetchedAt: time.Now(),
+		TagKey: tagKey, SourceKey: sourceKey, GoogleKey: googleKey, Version: cacheVersion,
+	}
 	p.persistCache()
 	p.mu.Unlock()
 	return res
@@ -618,6 +678,10 @@ func attr(n *html.Node, key string) string {
 // --- Google Books ---
 
 func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string, throttle bool) (*Result, error) {
+	key := p.googleAPIKeyValue()
+	if key == "" {
+		return nil, nil
+	}
 	if throttle {
 		p.throttle(ctx, SourceGoogleBooks)
 	}
@@ -626,6 +690,7 @@ func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string, t
 		q += fmt.Sprintf(` inauthor:%q`, author)
 	}
 	u := p.GoogleBase + "/books/v1/volumes?maxResults=10&q=" + url.QueryEscape(q)
+	u += "&key=" + url.QueryEscape(key)
 	body, err := p.get(ctx, u, false)
 	if err != nil {
 		return nil, err

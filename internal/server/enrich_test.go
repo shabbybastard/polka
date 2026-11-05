@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"testing"
+
+	"github.com/vestigiumincaligne/polka/internal/enrich"
 )
 
 func newJar(t *testing.T) *cookiejar.Jar {
@@ -98,6 +100,53 @@ func TestSettingsAndRatings(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("settings as reader -> %d", resp.StatusCode)
+	}
+}
+
+func TestGoogleBooksKeySetting(t *testing.T) {
+	ts, client, _ := newManageServer(t)
+
+	resp := postJSON(t, client, ts.URL+"/admin/settings", map[string]any{
+		"googleBooksKey": "test-google-key",
+	})
+	var settings map[string]any
+	decode(t, resp, &settings)
+	if settings["googleBooksKey"] != "test-google-key" {
+		t.Errorf("saved key = %v", settings["googleBooksKey"])
+	}
+
+	resp, _ = client.Get(ts.URL + "/admin/settings")
+	decode(t, resp, &settings)
+	if settings["googleBooksKey"] != "test-google-key" {
+		t.Errorf("loaded key = %v", settings["googleBooksKey"])
+	}
+
+	resp = postJSON(t, client, ts.URL+"/admin/settings", map[string]any{"googleBooksKey": ""})
+	decode(t, resp, &settings)
+	if settings["googleBooksKey"] != "" {
+		t.Errorf("cleared key = %v", settings["googleBooksKey"])
+	}
+}
+
+func TestEnrichmentViewFiltersDisabledSources(t *testing.T) {
+	res := &enrich.Enrichment{Sources: []enrich.Result{
+		{Source: enrich.SourceLiveLib, Rating: 0, Tags: []string{"Роман"}},
+		{Source: enrich.SourceGoogleBooks, Rating: 4.0},
+		{Source: enrich.SourceOpenLibrary, Rating: 4.2, RatingsCount: 10},
+	}}
+	view := (&Server{}).enrichmentView(res, map[string]bool{
+		enrich.SourceLiveLib: true, enrich.SourceOpenLibrary: true,
+	})
+	if len(view.Sources) != 2 {
+		t.Fatalf("filtered sources = %+v", view.Sources)
+	}
+	if view.Primary == nil || view.Primary.Source != enrich.SourceOpenLibrary {
+		t.Errorf("primary = %+v", view.Primary)
+	}
+	for _, src := range view.Sources {
+		if src.Source == enrich.SourceGoogleBooks {
+			t.Error("disabled source leaked into the view")
+		}
 	}
 }
 

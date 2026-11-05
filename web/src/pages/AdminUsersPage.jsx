@@ -143,7 +143,7 @@ const AdminUsersPage = ({ me }) => {
           <tbody>
             {users.map((u) => (
               <tr key={u.id} className={u.disabled ? "is-disabled" : ""}>
-                <td>{u.login}{u.id === me?.id && <span className="tag users-table__you">{t("users.you")}</span>}</td>
+                <td>{u.login}</td>
                 <td>{u.displayName || "—"}</td>
                 <td>
                   <span className={`tag ${u.role === "admin" ? "users-table__admin" : ""}`}>

@@ -43,17 +43,13 @@
   opacity: 0.5;
 }
 
-.users-table__you {
-  margin-left: 8px;
-}
-
 .users-table__admin {
   background: var(--accent, #ffd24c);
   color: #1a1714;
 }
 
 .users-table__email {
-  width: 220px;
+  width: 190px;
   font: inherit;
   font-size: 13px;
   padding: 7px 10px;
@@ -75,18 +71,18 @@
 
 .users-table__actions {
   display: grid;
-  grid-template-columns: repeat(5, 130px);
+  grid-template-columns: 96px 68px 126px 84px 62px;
   align-items: center;
   justify-content: end;
-  gap: 8px;
+  gap: 4px;
   white-space: nowrap;
 }
 
 .users-table__actions .btn {
   width: 100%;
   margin: 0;
-  padding: 4px 0;
-  font-size: 13px;
+  padding: 2px 4px;
+  font-size: 12px;
   text-align: center;
 }
 

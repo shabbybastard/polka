@@ -166,6 +166,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const genrePolling = useRef(null);
   const [similar, setSimilar] = useState(null);
   const [tastediveKey, setTastediveKey] = useState("");
+  const [googleBooksKey, setGoogleBooksKey] = useState("");
   const [homeHero, setHomeHero] = useState(true);
   const [opdsEnabled, setOpdsEnabled] = useState(true);
   const [opdsCopied, setOpdsCopied] = useState(false);
@@ -209,6 +210,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setColSources(res.collectionSources ?? []);
         setSimilar(res.similar ?? null);
         setTastediveKey(res.tastediveKey ?? "");
+        setGoogleBooksKey(res.googleBooksKey ?? "");
         setHomeHero(res.homeHero !== false);
         setOpdsEnabled(res.opdsEnabled !== false);
         setConvert({ fb2ToEpub: false, keepSource: true, ...(res.convert ?? {}) });
@@ -268,6 +270,15 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         alert(t("admin.tastedive.saved"));
       })
       .catch(() => alert(t("admin.tastedive.saveFail")));
+  };
+
+  const saveGoogleBooksKey = () => {
+    saveSettings({ googleBooksKey })
+      .then((res) => {
+        setGoogleBooksKey(res.googleBooksKey ?? "");
+        alert(t("admin.google.keySaved"));
+      })
+      .catch(() => alert(t("admin.google.keySaveFail")));
   };
 
   const toggleHomeHero = () => {
@@ -722,6 +733,35 @@ const AdminLibraryPage = ({ onConfigChange }) => {
               </li>
             ))}
           </ul>
+        )}
+        {enrichment && (
+          <div className="library-admin__google-key">
+            <span className="library-admin__source-name">{t("admin.google.key")}</span>
+            <div className="library-admin__key-row">
+              <input
+                type="text"
+                placeholder={t("admin.google.keyPlaceholder")}
+                aria-label={t("admin.google.key")}
+                value={googleBooksKey}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setGoogleBooksKey(e.target.value)}
+              />
+              <button type="button" className="btn btn-primary" onClick={saveGoogleBooksKey}>
+                {t("admin.google.keySave")}
+              </button>
+            </div>
+            <p className="library-admin__hint">
+              {t("admin.google.keyHint")}{" "}
+              <a
+                href="https://developers.google.com/books/docs/v1/using#APIKey"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t("admin.google.keyDocs")}
+              </a>
+            </p>
+          </div>
         )}
       </section>
 
