@@ -211,12 +211,32 @@ Everything has a sensible default. The most useful flags of `polka serve`:
 | `--data-dir` | `~/.polka` | database, settings, covers cache |
 | `--library-dir` | — | folder with books (or inpx archives) |
 | `--auth` | `required` | `required` (accounts), `public` (open access) or `demo` (ephemeral guest sessions); the desktop app sets `desktop` internally |
+| `--telegram-token` | — | optional Telegram bot token; also `POLKA_TELEGRAM_TOKEN` |
 
 External rating/recommendation sources are configured in the web UI
 (*Manage → External ratings / Similar books*) and are **off by default**
 except local recommendations — nothing is queried without the admin's
 consent. External genre sources are a separate switch and are also off by
 default.
+
+### Telegram bot (optional)
+
+The server can run an isolated long-polling Telegram bot. It is disabled
+unless a token is set, and it never changes the behaviour of the web UI or
+the desktop app:
+
+```sh
+POLKA_TELEGRAM_TOKEN=123456:ABC... ./bin/polka serve --library-dir /books
+```
+
+Link accounts only in *Manage → Users* by filling the numeric Telegram ID.
+There is no self-registration and no linking command in the chat. Every bot
+update re-reads the account, so disabling a user or changing the role takes
+effect immediately. `/stats` and `/status` are admin-only; book uploads are
+admin-only and limited to 50 per hour per user (configurable in
+*Manage → Library*). The bot shows covers, metadata, Polka ratings, reading
+progress and search results, but it never sends book files. Temporary
+downloads are deleted after ingestion.
 
 ## Tech notes
 

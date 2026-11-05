@@ -29,6 +29,18 @@ func (s *Server) enrichEnabled(r *http.Request) map[string]bool {
 	return s.enrichEnabledCtx(r.Context())
 }
 
+const telegramUploadRateLimitKey = "telegram.upload_rate_limit"
+
+// telegramUploadRateLimit is the per-user hourly Telegram upload quota.
+// Out-of-range values fall back to the documented default of 50.
+func (s *Server) telegramUploadRateLimit(ctx context.Context) int {
+	n, err := strconv.Atoi(s.users.GetSetting(ctx, telegramUploadRateLimitKey, "50"))
+	if err != nil || n < 1 || n > 10000 {
+		return 50
+	}
+	return n
+}
+
 // tagSourceList is the fixed set of external sources that can contribute
 // catalog tags. LiveLib genres are localized; Open Library subjects are
 // usually English, hence the separate toggles.
@@ -147,7 +159,10 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 			"fb2ToEpub":  s.users.GetSetting(r.Context(), "convert.fb2_to_epub", "0") == "1",
 			"keepSource": s.keepConversionSource(r.Context()),
 		},
-		"smtp":              s.smtpSettings(r),
+		"smtp": s.smtpSettings(r),
+		"telegram": map[string]any{
+			"uploadRateLimit": s.telegramUploadRateLimit(r.Context()),
+		},
 		"collectionSources": s.sourcesJSON(r.Context()),
 		"library":           s.libraryStatus(),
 	})
@@ -185,7 +200,10 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 			FB2ToEPUB  *bool `json:"fb2ToEpub"`
 			KeepSource *bool `json:"keepSource"`
 		} `json:"convert"`
-		Smtp    *smtpInput      `json:"smtp"`
+		Smtp     *smtpInput `json:"smtp"`
+		Telegram *struct {
+			UploadRateLimit *int `json:"uploadRateLimit"`
+		} `json:"telegram"`
 		Sources map[string]bool `json:"collectionSources"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
@@ -294,6 +312,17 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 				}
 				s.invalidateGenreCache()
 			}
+		}
+	}
+	if req.Telegram != nil && req.Telegram.UploadRateLimit != nil {
+		n := *req.Telegram.UploadRateLimit
+		if n < 1 || n > 10000 {
+			http.Error(w, "telegram upload rate limit must be 1..10000", http.StatusBadRequest)
+			return
+		}
+		if err := s.users.SetSetting(r.Context(), telegramUploadRateLimitKey, strconv.Itoa(n)); err != nil {
+			s.apiError(w, err)
+			return
 		}
 	}
 	if req.Smtp != nil {

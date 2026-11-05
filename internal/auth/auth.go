@@ -30,6 +30,8 @@ var (
 	ErrNotFound           = errors.New("user not found")
 	ErrLoginTaken         = errors.New("login already exists")
 	ErrLastAdmin          = errors.New("cannot remove the last administrator")
+	ErrTelegramTaken      = errors.New("telegram id is already linked")
+	ErrInvalidTelegramID  = errors.New("invalid telegram id")
 )
 
 type User struct {
@@ -38,6 +40,7 @@ type User struct {
 	DisplayName string
 	Role        string
 	Disabled    bool
+	TelegramID  int64
 	CreatedAt   string
 }
 
@@ -55,6 +58,7 @@ CREATE TABLE IF NOT EXISTS users (
 	display_name  TEXT NOT NULL DEFAULT '',
 	role          TEXT NOT NULL DEFAULT 'user',
 	disabled      INTEGER NOT NULL DEFAULT 0,
+	telegram_id   INTEGER NOT NULL DEFAULT 0,
 	created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -81,7 +85,16 @@ func Open(path string) (*Service, error) {
 		return nil, fmt.Errorf("auth schema: %w", err)
 	}
 	migrateProgress(db)
+	migrateTelegram(db)
 	return &Service{db: db}, nil
+}
+
+// migrateTelegram upgrades users.db from builds that predate the optional
+// Telegram link. A duplicate column error means the database is already
+// up to date and is intentionally ignored.
+func migrateTelegram(db *sql.DB) {
+	db.Exec(`ALTER TABLE users ADD COLUMN telegram_id INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram ON users (telegram_id) WHERE telegram_id != 0`)
 }
 
 func (s *Service) Close() error { return s.db.Close() }
@@ -138,9 +151,9 @@ func tokenHash(token string) string {
 func (s *Service) EnsureLogin(ctx context.Context, login, displayName, role string) (*User, error) {
 	var u User
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, login, display_name, role, disabled, created_at
+		SELECT id, login, display_name, role, disabled, telegram_id, created_at
 		FROM users WHERE login = ?`, login).
-		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt)
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt)
 	if err == nil {
 		return &u, nil
 	}
@@ -155,9 +168,9 @@ func (s *Service) Verify(ctx context.Context, login, password string) (*User, er
 	var u User
 	var hash string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, login, password_hash, display_name, role, disabled, created_at
+		SELECT id, login, password_hash, display_name, role, disabled, telegram_id, created_at
 		FROM users WHERE login = ?`, strings.TrimSpace(login)).
-		Scan(&u.ID, &u.Login, &hash, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt)
+		Scan(&u.ID, &u.Login, &hash, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && (u.Disabled || !verifyPassword(password, hash))) {
 		return nil, ErrInvalidCredentials
 	}
@@ -198,10 +211,10 @@ func (s *Service) GetByToken(ctx context.Context, token string) (*User, error) {
 	var u User
 	var expiresStr string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT u.id, u.login, u.display_name, u.role, u.disabled, u.created_at, s.expires_at
+		SELECT u.id, u.login, u.display_name, u.role, u.disabled, u.telegram_id, u.created_at, s.expires_at
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = ?`, tokenHash(token)).
-		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt, &expiresStr)
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt, &expiresStr)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -241,7 +254,7 @@ func (s *Service) adminsBeside(ctx context.Context, excludeID int64) (int, error
 
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, login, display_name, role, disabled, created_at
+		SELECT id, login, display_name, role, disabled, telegram_id, created_at
 		FROM users ORDER BY login`)
 	if err != nil {
 		return nil, err
@@ -250,7 +263,7 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -259,18 +272,30 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 func (s *Service) CreateUser(ctx context.Context, login, password, displayName, role string) (*User, error) {
+	return s.CreateUserWithTelegram(ctx, login, password, displayName, role, 0)
+}
+
+// CreateUserWithTelegram creates an account together with an optional
+// Telegram link. Zero means "not linked".
+func (s *Service) CreateUserWithTelegram(ctx context.Context, login, password, displayName, role string, telegramID int64) (*User, error) {
 	login = strings.TrimSpace(login)
 	if login == "" || password == "" {
 		return nil, errors.New("login and password are required")
+	}
+	if telegramID < 0 {
+		return nil, ErrInvalidTelegramID
 	}
 	if role != RoleAdmin {
 		role = RoleUser
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (login, password_hash, display_name, role) VALUES (?, ?, ?, ?)`,
-		login, hashPassword(password), strings.TrimSpace(displayName), role)
+		INSERT INTO users (login, password_hash, display_name, role, telegram_id) VALUES (?, ?, ?, ?, ?)`,
+		login, hashPassword(password), strings.TrimSpace(displayName), role, telegramID)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		switch {
+		case strings.Contains(err.Error(), "telegram_id"):
+			return nil, ErrTelegramTaken
+		case strings.Contains(err.Error(), "UNIQUE"):
 			return nil, ErrLoginTaken
 		}
 		return nil, err
@@ -282,12 +307,61 @@ func (s *Service) CreateUser(ctx context.Context, login, password, displayName, 
 func (s *Service) GetByID(ctx context.Context, id int64) (*User, error) {
 	var u User
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, login, display_name, role, disabled, created_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt)
+		SELECT id, login, display_name, role, disabled, telegram_id, created_at
+		FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return &u, err
+}
+
+// GetByTelegramID returns the account linked to a Telegram user. Disabled
+// accounts are returned as-is; callers must re-check the flag on every use.
+func (s *Service) GetByTelegramID(ctx context.Context, telegramID int64) (*User, error) {
+	if telegramID <= 0 {
+		return nil, ErrNotFound
+	}
+	var u User
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, login, display_name, role, disabled, telegram_id, created_at
+		FROM users WHERE telegram_id = ?`, telegramID).
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &u, err
+}
+
+// SetTelegramID links or unlinks (telegramID == 0) an account.
+func (s *Service) SetTelegramID(ctx context.Context, userID, telegramID int64) error {
+	if telegramID < 0 {
+		return ErrInvalidTelegramID
+	}
+	if _, err := s.GetByID(ctx, userID); err != nil {
+		return err
+	}
+	if telegramID != 0 {
+		var linkedTo int64
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE telegram_id = ?`, telegramID).Scan(&linkedTo)
+		if err == nil && linkedTo != userID {
+			return ErrTelegramTaken
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET telegram_id = ? WHERE id = ?`, telegramID, userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "telegram_id") {
+			return ErrTelegramTaken
+		}
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateUser changes the provided fields (nil — leave as is). Demoting

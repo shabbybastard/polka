@@ -259,6 +259,32 @@
   font-size: 13px;
 }
 
+.library-admin__telegram-limit {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  max-width: 680px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.library-admin__telegram-limit label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.library-admin__telegram-limit input {
+  width: 96px;
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.15));
+  background: var(--bg);
+  color: var(--fg);
+}
+
 .library-admin__genre-sync {
   display: flex;
   flex-direction: column;

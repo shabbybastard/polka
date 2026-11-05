@@ -19,6 +19,9 @@ type Config struct {
 	// Auth: "required" — catalog only after login, "public" — open,
 	// "demo" — public showcase with ephemeral guest sessions.
 	Auth string
+	// TelegramToken enables the optional server-side Telegram bot.
+	// Empty means the bot is not started at all.
+	TelegramToken string
 	// Version is the build version (set by the binary at startup).
 	Version string
 }
@@ -45,6 +48,7 @@ func Load(args []string, extra func(*flag.FlagSet)) (*Config, []string, error) {
 	fs.StringVar(&cfg.DataDir, "data-dir", env("POLKA_DATA_DIR", defaultData), "directory for database and caches")
 	fs.StringVar(&cfg.LibraryDir, "library-dir", env("POLKA_LIBRARY_DIR", ""), "root directory of the book library")
 	fs.StringVar(&cfg.Auth, "auth", env("POLKA_AUTH", "required"), `access mode: "required", "public" or "demo"`)
+	fs.StringVar(&cfg.TelegramToken, "telegram-token", env("POLKA_TELEGRAM_TOKEN", ""), "optional Telegram bot token (long polling)")
 	if extra != nil {
 		extra(fs)
 	}

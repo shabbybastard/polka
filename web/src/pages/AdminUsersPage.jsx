@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { createUser, deleteUser, fetchUsers, updateUser } from "../api/auth";
 import "./AdminUsersPage.css";
 
-const emptyForm = { login: "", password: "", displayName: "", role: "user" };
+const emptyForm = { login: "", password: "", displayName: "", role: "user", telegramId: "" };
 
 const ReaderEmailCell = ({ user, onSave }) => {
   const [value, setValue] = useState(user.readerEmail ?? "");
@@ -39,6 +39,48 @@ const ReaderEmailCell = ({ user, onSave }) => {
   );
 };
 
+const TelegramCell = ({ user, onSave }) => {
+  const [value, setValue] = useState(user.telegramId ? String(user.telegramId) : "");
+
+  useEffect(() => {
+    setValue(user.telegramId ? String(user.telegramId) : "");
+  }, [user.telegramId]);
+
+  const commit = () => {
+    const next = value.trim();
+    if (next === (user.telegramId ? String(user.telegramId) : "")) return;
+    if (next !== "" && !/^\d{1,20}$/.test(next)) {
+      alert(t("users.telegramInvalid"));
+      setValue(user.telegramId ? String(user.telegramId) : "");
+      return;
+    }
+    onSave(user, next === "" ? 0 : Number(next)).catch(() =>
+      setValue(user.telegramId ? String(user.telegramId) : "")
+    );
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      className="users-table__email users-table__telegram"
+      aria-label={t("users.telegramId")}
+      placeholder={t("users.telegramIdPh")}
+      value={value}
+      autoComplete="off"
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+};
+
 const AdminUsersPage = ({ me }) => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,9 +99,16 @@ const AdminUsersPage = ({ me }) => {
 
   const showError = (err) => {
     if (err.status === 409) {
-      alert(String(err.message).includes("admin") ? t("users.lastAdmin") : t("users.loginTaken"));
+      const message = String(err.message);
+      if (message.includes("telegram")) alert(t("users.telegramTaken"));
+      else if (message.includes("admin")) alert(t("users.lastAdmin"));
+      else alert(t("users.loginTaken"));
     } else if (err.status === 400) {
-      alert(t("users.emailInvalid"));
+      alert(
+        String(err.message).includes("telegram")
+          ? t("users.telegramInvalid")
+          : t("users.emailInvalid")
+      );
     } else {
       alert(t("users.opFail"));
     }
@@ -68,8 +117,18 @@ const AdminUsersPage = ({ me }) => {
   const submit = (e) => {
     e.preventDefault();
     if (!form.login || !form.password || busy) return;
+    const payload = { ...form };
+    if (payload.telegramId === "") {
+      delete payload.telegramId;
+    } else {
+      if (!/^\d{1,20}$/.test(String(payload.telegramId))) {
+        alert(t("users.telegramInvalid"));
+        return;
+      }
+      payload.telegramId = Number(payload.telegramId);
+    }
     setBusy(true);
-    createUser(form)
+    createUser(payload)
       .then(() => {
         setForm(emptyForm);
         reload();
@@ -86,6 +145,14 @@ const AdminUsersPage = ({ me }) => {
 
   const saveReaderEmail = (u, readerEmail) =>
     updateUser(u.id, { readerEmail })
+      .then(reload)
+      .catch((err) => {
+        showError(err);
+        throw err;
+      });
+
+  const saveTelegram = (u, telegramId) =>
+    updateUser(u.id, { telegramId })
       .then(reload)
       .catch((err) => {
         showError(err);
@@ -136,6 +203,7 @@ const AdminUsersPage = ({ me }) => {
               <th>{t("users.name")}</th>
               <th>{t("users.role")}</th>
               <th>{t("users.status")}</th>
+              <th>{t("users.telegramId")}</th>
               <th>{t("users.readerEmail")}</th>
               <th aria-label="actions" />
             </tr>
@@ -151,6 +219,9 @@ const AdminUsersPage = ({ me }) => {
                   </span>
                 </td>
                 <td>{u.disabled ? t("users.disabled") : t("users.active")}</td>
+                <td>
+                  <TelegramCell user={u} onSave={saveTelegram} />
+                </td>
                 <td>
                   <ReaderEmailCell user={u} onSave={saveReaderEmail} />
                 </td>
@@ -202,6 +273,13 @@ const AdminUsersPage = ({ me }) => {
             placeholder={t("users.namePh")}
             value={form.displayName}
             onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+          />
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder={t("users.telegramIdPh")}
+            value={form.telegramId}
+            onChange={(e) => setForm({ ...form, telegramId: e.target.value })}
           />
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             <option value="user">{t("users.reader")}</option>

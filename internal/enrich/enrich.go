@@ -227,6 +227,48 @@ func (p *Provider) HasCachedRating(key string, enabled map[string]bool) bool {
 	return false
 }
 
+// Cached returns a read-only view of the enrichment already stored for a
+// book. It never performs network requests; disabled sources and expired
+// entries are omitted. The Telegram bot uses it for instant book cards.
+func (p *Provider) Cached(key string, enabled map[string]bool) *Enrichment {
+	sourceKey := enabledSourcesKey(enabled)
+	googleKey := googleKeyTag(p.googleAPIKeyValue())
+	p.mu.Lock()
+	e, ok := p.cache[key]
+	p.mu.Unlock()
+	if !ok || e.Result == nil || e.Version != cacheVersion || e.SourceKey != sourceKey || e.GoogleKey != googleKey {
+		return nil
+	}
+	ttl := successTTL
+	if e.Result.Negative {
+		ttl = negativeTTL
+	}
+	if time.Since(e.FetchedAt) >= ttl {
+		return nil
+	}
+	view := &Enrichment{}
+	for _, src := range e.Result.Sources {
+		if enabled[src.Source] {
+			view.Sources = append(view.Sources, src)
+		}
+	}
+	if len(view.Sources) == 0 {
+		return nil
+	}
+	for i := range view.Sources {
+		src := view.Sources[i]
+		if view.Primary == nil || (view.Primary.Rating <= 0 && src.Rating > 0) {
+			copy := src
+			view.Primary = &copy
+		}
+	}
+	view.ExtraSourceCount = len(view.Sources) - 1
+	if view.ExtraSourceCount < 0 {
+		view.ExtraSourceCount = 0
+	}
+	return view
+}
+
 // ForgetBook drops cached enrichment and similar-books data for one book.
 // The next page load queries the sources again.
 func (p *Provider) ForgetBook(bookID string) {

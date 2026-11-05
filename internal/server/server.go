@@ -40,6 +40,7 @@ type Server struct {
 	reader     readerCache          // parsed books for online reading
 	basic      basicCache           // verified Basic credentials (OPDS)
 	genres     genreCache           // genre counters for search
+	startedAt  time.Time            // server uptime for diagnostics
 
 	loginLimiter *rateLimiter // throttle password guessing
 	guestLimiter *rateLimiter // throttle demo guest creation
@@ -47,9 +48,17 @@ type Server struct {
 }
 
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Library, users *auth.Service, sync *syncer.Syncer, webFS fs.FS) *http.Server {
+	httpSrv, _ := NewWithApp(cfg, log, st, lib, users, sync, webFS)
+	return httpSrv
+}
+
+// NewWithApp also exposes the internal server for optional integrations
+// (the Telegram bot) while New keeps the historical HTTP-only signature.
+func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Library, users *auth.Service, sync *syncer.Syncer, webFS fs.FS) (*http.Server, *Server) {
 	s := &Server{
 		cfg: cfg, log: log, st: st, lib: lib, users: users, sync: sync,
-		enrich: enrich.New(filepath.Join(cfg.DataDir, "enrichment.json")),
+		startedAt: time.Now(),
+		enrich:    enrich.New(filepath.Join(cfg.DataDir, "enrichment.json")),
 		// 10 failed logins / 5 min / IP; 20 new guests / min / IP.
 		loginLimiter: newRateLimiter(10, 5*time.Minute),
 		guestLimiter: newRateLimiter(20, time.Minute),
@@ -267,7 +276,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 		Addr:              cfg.Addr,
 		Handler:           securityHeaders(s.logRequests(s.maybeDemo(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
-	}
+	}, s
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {

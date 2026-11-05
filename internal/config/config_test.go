@@ -14,6 +14,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	t.Setenv("POLKA_ADDR", "")
 	t.Setenv("POLKA_LIBRARY_DIR", "")
 	t.Setenv("POLKA_AUTH", "")
+	t.Setenv("POLKA_TELEGRAM_TOKEN", "")
 	t.Setenv("POLKA_DATA_DIR", filepath.Join(dir, "envdata"))
 	cfg, rest, err := Load(nil, nil)
 	if err != nil {
@@ -36,17 +37,18 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	t.Setenv("POLKA_ADDR", "127.0.0.1:1")
 	t.Setenv("POLKA_LIBRARY_DIR", "/books")
 	t.Setenv("POLKA_AUTH", "public")
+	t.Setenv("POLKA_TELEGRAM_TOKEN", "123:env-token")
 	cfg, _, _ = Load(nil, nil)
-	if cfg.Addr != "127.0.0.1:1" || cfg.LibraryDir != "/books" || cfg.Auth != "public" {
+	if cfg.Addr != "127.0.0.1:1" || cfg.LibraryDir != "/books" || cfg.Auth != "public" || cfg.TelegramToken != "123:env-token" {
 		t.Errorf("env: %+v", cfg)
 	}
 	// …and flags beat the environment; positional args come back.
 	flagData := filepath.Join(dir, "flagdata")
-	cfg, rest, err = Load([]string{"--addr", ":9", "--data-dir", flagData, "--library-dir=/lib", "--auth", "demo", "catalog.inpx"}, nil)
+	cfg, rest, err = Load([]string{"--addr", ":9", "--data-dir", flagData, "--library-dir=/lib", "--auth", "demo", "--telegram-token", "9:flag-token", "catalog.inpx"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":9" || cfg.DataDir != flagData || cfg.LibraryDir != "/lib" || cfg.Auth != "demo" {
+	if cfg.Addr != ":9" || cfg.DataDir != flagData || cfg.LibraryDir != "/lib" || cfg.Auth != "demo" || cfg.TelegramToken != "9:flag-token" {
 		t.Errorf("flags: %+v", cfg)
 	}
 	if len(rest) != 1 || rest[0] != "catalog.inpx" {

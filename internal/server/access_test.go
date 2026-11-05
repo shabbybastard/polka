@@ -23,6 +23,7 @@ import (
 // a plain reader, both logged in.
 type fullServer struct {
 	ts            *httptest.Server
+	app           *Server
 	admin, reader *http.Client
 	users         *auth.Service
 	st            *store.Store
@@ -81,7 +82,8 @@ func newFullServer(t *testing.T, mode string) *fullServer {
 	cfg := &config.Config{LibraryDir: libDir, DataDir: dir, Auth: mode}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	webFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html/>")}}
-	srv := New(cfg, log, st, library.New(libDir), users, nil, webFS)
+	srv, app := NewWithApp(cfg, log, st, library.New(libDir), users, nil, webFS)
+	f.app = app
 	f.ts = httptest.NewServer(srv.Handler)
 	t.Cleanup(f.ts.Close)
 	if mode != "demo" {

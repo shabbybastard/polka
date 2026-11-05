@@ -59,6 +59,10 @@
   color: var(--fg);
 }
 
+.users-table__telegram {
+  width: 150px;
+}
+
 .users-table__email:focus {
   outline: 2px solid var(--accent, #ffd24c);
   outline-offset: 1px;
@@ -130,5 +134,5 @@
 }
 
 .users-table {
-  min-width: 1180px;
+  min-width: 1340px;
 }

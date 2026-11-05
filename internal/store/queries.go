@@ -36,6 +36,8 @@ type BookDetails struct {
 	Book
 	File       string
 	Folder     string
+	Lang       string
+	ISBN       string
 	Authors    []AuthorName
 	Series     []SeriesRef
 	Genres     []string
@@ -176,11 +178,16 @@ func (s *Store) SearchStats(ctx context.Context, query string) (SearchStats, err
 }
 
 func (s *Store) SearchTitles(ctx context.Context, query string, limit int) ([]Book, error) {
+	return s.SearchTitlesPage(ctx, query, limit, 0)
+}
+
+// SearchTitlesPage is the paginated title-only search used by the bot.
+func (s *Store) SearchTitlesPage(ctx context.Context, query string, limit, offset int) ([]Book, error) {
 	q := ftsQuery(query, "title")
 	if q == "" {
 		return nil, nil
 	}
-	return s.rankedSearch(ctx, q, limit, 0)
+	return s.rankedSearch(ctx, q, limit, offset)
 }
 
 // rankedSearch returns FTS matches ordered by relevance (bm25), with the
@@ -467,10 +474,10 @@ func (s *Store) SearchBooks(ctx context.Context, query string, limit, offset int
 func (s *Store) BookDetails(ctx context.Context, bookID int64) (*BookDetails, error) {
 	d := &BookDetails{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT`+bookColumns+`, b.file, f.name`+bookFrom+
+		`SELECT`+bookColumns+`, b.lang, b.isbn, b.file, f.name`+bookFrom+
 			` JOIN folders f ON f.id = b.folder_id WHERE b.id = ? AND b.deleted = 0`, bookID).
 		Scan(&d.ID, &d.Title, &d.AuthorNames, &d.SeriesTitle, &d.SeqNumber,
-			&d.Year, &d.LibRate, &d.Ext, &d.Size, &d.File, &d.Folder)
+			&d.Year, &d.LibRate, &d.Ext, &d.Size, &d.Lang, &d.ISBN, &d.File, &d.Folder)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

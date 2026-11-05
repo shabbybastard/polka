@@ -53,9 +53,9 @@ func (s *Service) SetKosyncKey(ctx context.Context, userID int64, key string) er
 func (s *Service) GetByLogin(ctx context.Context, login string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, login, display_name, role, disabled, created_at
+		SELECT id, login, display_name, role, disabled, telegram_id, created_at
 		FROM users WHERE login = ?`, strings.TrimSpace(login)).
-		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.CreatedAt)
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.Role, &u.Disabled, &u.TelegramID, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

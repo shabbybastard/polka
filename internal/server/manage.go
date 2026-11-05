@@ -114,37 +114,42 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *multipart.FileHeader, force bool, lang string) uploadResult {
-	res := uploadResult{Name: fh.Filename}
+	src, err := fh.Open()
+	if err != nil {
+		return uploadResult{Name: fh.Filename, Error: tr(lang, "upload.readfail")}
+	}
+	defer src.Close()
+	return s.saveUploadedBookStream(ctx, uploadDir, fh.Filename, src, force, lang)
+}
 
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(fh.Filename), "."))
+// saveUploadedBookStream is the shared ingestion path for HTTP uploads and
+// the Telegram bot: hashes, duplicate checks, metadata, and optional FB2
+// conversion all stay in one place.
+func (s *Server) saveUploadedBookStream(ctx context.Context, uploadDir, filename string, src io.Reader, force bool, lang string) uploadResult {
+	res := uploadResult{Name: filename}
+
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
 	if !supportedUploadExt[ext] {
 		res.Error = tr(lang, "upload.badformat")
 		return res
 	}
 	if ext == "fb2" && s.fb2ToEPUBEnabled(ctx) {
-		return s.queueFB2Conversion(ctx, fh, lang)
+		return s.queueFB2ConversionStream(ctx, filename, src, lang)
 	}
 
-	base := sanitizeFileName(strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename)))
+	base := sanitizeFileName(strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)))
 	if base == "" {
 		base = "book"
 	}
 	dst, base, err := createUnique(uploadDir, base, ext)
 	if err != nil {
 		res.Error = tr(lang, "upload.savefail")
-		s.log.Error("upload", "file", fh.Filename, "error", err)
+		s.log.Error("upload", "file", filename, "error", err)
 		return res
 	}
 
-	src, err := fh.Open()
-	if err != nil {
-		dst.Close()
-		res.Error = tr(lang, "upload.readfail")
-		return res
-	}
 	hasher := sha256.New()
 	size, err := io.Copy(io.MultiWriter(dst, hasher), src)
-	src.Close()
 	dst.Close()
 	if err != nil {
 		os.Remove(dst.Name())
@@ -209,7 +214,7 @@ func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *mul
 	if err != nil {
 		os.Remove(dst.Name())
 		res.Error = tr(lang, "upload.dbfail")
-		s.log.Error("upload add", "file", fh.Filename, "error", err)
+		s.log.Error("upload add", "file", filename, "error", err)
 		return res
 	}
 
@@ -222,6 +227,20 @@ func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *mul
 	res.Authors = strings.Join(names, ", ")
 	s.log.Info("book uploaded", "id", bookID, "title", input.Title, "file", base+"."+ext)
 	return res
+}
+
+// ingestReader is the bot entry point: it writes into the same uploads
+// folder as the web UI and reuses saveUploadedBookStream.
+func (s *Server) ingestReader(ctx context.Context, filename string, src io.Reader, force bool, lang string) uploadResult {
+	if s.lib == nil {
+		return uploadResult{Name: filename, Error: tr(lang, "upload.savefail")}
+	}
+	uploadDir := filepath.Join(s.cfg.LibraryDir, uploadsFolder)
+	if err := os.MkdirAll(uploadDir, uploadFolderPerms); err != nil {
+		s.log.Error("upload dir", "error", err)
+		return uploadResult{Name: filename, Error: tr(lang, "upload.savefail")}
+	}
+	return s.saveUploadedBookStream(ctx, uploadDir, filename, src, force, lang)
 }
 
 // extractUploadMeta extracts metadata from the file; on failure

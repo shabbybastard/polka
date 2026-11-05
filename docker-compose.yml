@@ -7,6 +7,9 @@ services:
     volumes:
       - polka-data:/data        # database, settings, covers cache
       - ./books:/books          # your book collection (fb2/epub/pdf/... or an unpacked inpx library)
+    environment:
+      # Optional: enables the long-polling Telegram bot.
+      POLKA_TELEGRAM_TOKEN: ${POLKA_TELEGRAM_TOKEN:-}
     restart: unless-stopped
 
 volumes:

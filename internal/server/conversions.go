@@ -42,7 +42,17 @@ func (s *Server) keepConversionSource(ctx context.Context) bool {
 // queueFB2Conversion stores an uploaded FB2 in the inbox and creates a job.
 // The file is not added to the catalog until the background worker finishes.
 func (s *Server) queueFB2Conversion(ctx context.Context, fh *multipart.FileHeader, lang string) uploadResult {
-	res := uploadResult{Name: fh.Filename}
+	src, err := fh.Open()
+	if err != nil {
+		return uploadResult{Name: fh.Filename, Error: tr(lang, "upload.readfail")}
+	}
+	defer src.Close()
+	return s.queueFB2ConversionStream(ctx, fh.Filename, src, lang)
+}
+
+// queueFB2ConversionStream is shared by the web upload and the Telegram bot.
+func (s *Server) queueFB2ConversionStream(ctx context.Context, filename string, src io.Reader, lang string) uploadResult {
+	res := uploadResult{Name: filename}
 	if s.conv == nil || s.cfg.DataDir == "" {
 		res.Error = tr(lang, "upload.savefail")
 		return res
@@ -57,12 +67,6 @@ func (s *Server) queueFB2Conversion(ctx context.Context, fh *multipart.FileHeade
 	source := id + ".fb2"
 	dstPath := filepath.Join(inbox, source)
 
-	src, err := fh.Open()
-	if err != nil {
-		res.Error = tr(lang, "upload.readfail")
-		return res
-	}
-	defer src.Close()
 	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, uploadFilePerms)
 	if err != nil {
 		s.log.Error("conversion inbox", "error", err)
@@ -77,7 +81,7 @@ func (s *Server) queueFB2Conversion(ctx context.Context, fh *multipart.FileHeade
 		res.Error = tr(lang, "upload.savefail")
 		return res
 	}
-	if err := s.conv.Create(ctx, id, fh.Filename, source); err != nil {
+	if err := s.conv.Create(ctx, id, filename, source); err != nil {
 		os.Remove(dstPath)
 		s.log.Error("conversion queue", "error", err)
 		res.Error = tr(lang, "upload.savefail")
@@ -85,7 +89,7 @@ func (s *Server) queueFB2Conversion(ctx context.Context, fh *multipart.FileHeade
 	}
 	res.JobID = id
 	res.Status = string(conversions.StatusQueued)
-	s.log.Info("fb2 queued for conversion", "file", fh.Filename, "job", id)
+	s.log.Info("fb2 queued for conversion", "file", filename, "job", id)
 	return res
 }
 

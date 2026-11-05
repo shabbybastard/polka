@@ -46,6 +46,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
   const [convert, setConvert] = useState({ fb2ToEpub: false, keepSource: true });
+  const [telegram, setTelegram] = useState({ uploadRateLimit: 50 });
   const [conversionJobs, setConversionJobs] = useState([]);
   const conversionPolling = useRef(null);
   const conversionDone = useRef(new Set());
@@ -249,6 +250,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setHomeHero(res.homeHero !== false);
         setOpdsEnabled(res.opdsEnabled !== false);
         setConvert({ fb2ToEpub: false, keepSource: true, ...(res.convert ?? {}) });
+        setTelegram({ uploadRateLimit: 50, ...(res.telegram ?? {}) });
         setSmtp(res.smtp ?? { security: "starttls", port: 587 });
         setLibrary(res.library ?? null);
       })
@@ -353,6 +355,17 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       setConvert(convert);
       alert(t("admin.sources.saveFail"));
     });
+  };
+
+  const saveTelegramLimit = () => {
+    const n = Number(telegram.uploadRateLimit);
+    if (!Number.isInteger(n) || n < 1 || n > 10000) {
+      alert(t("admin.telegram.limitInvalid"));
+      return;
+    }
+    saveSettings({ telegram: { uploadRateLimit: n } })
+      .then((res) => setTelegram({ uploadRateLimit: 50, ...(res.telegram ?? {}) }))
+      .catch(() => alert(t("admin.sources.saveFail")));
   };
 
   const opdsUrl = `${window.location.origin}/opds`;
@@ -501,6 +514,26 @@ const AdminLibraryPage = ({ onConfigChange }) => {
             <span className="library-admin__source-name">{t("admin.convert.keepSource")}</span>
             <span className="library-admin__source-hint">{t("admin.convert.keepSourceHint")}</span>
           </label>
+        </div>
+        <div className="library-admin__telegram-limit">
+          <label>
+            <span className="library-admin__source-name">{t("admin.telegram.uploadLimit")}</span>
+            <input
+              type="number"
+              min="1"
+              max="10000"
+              value={telegram.uploadRateLimit}
+              onChange={(e) => setTelegram({ ...telegram, uploadRateLimit: e.target.value })}
+              onBlur={saveTelegramLimit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <span className="library-admin__source-hint">{t("admin.telegram.uploadLimitHint")}</span>
         </div>
         <label className={`library-admin__dropzone ${uploading ? "is-busy" : ""}`}>
           <input

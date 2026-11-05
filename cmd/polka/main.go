@@ -22,6 +22,7 @@ import (
 	"github.com/shabbybastard/polka/internal/library"
 	"github.com/shabbybastard/polka/internal/server"
 	"github.com/shabbybastard/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/tgbot"
 	"github.com/shabbybastard/polka/web"
 )
 
@@ -41,7 +42,8 @@ const usage = `polka — сервер домашней библиотеки
   polka collections remove <slug>        удалить подборку
   polka version                  показать версию
 
-Флаги: --addr, --data-dir, --library-dir (или POLKA_ADDR, POLKA_DATA_DIR, POLKA_LIBRARY_DIR)
+Флаги: --addr, --data-dir, --library-dir, --telegram-token
+        (или POLKA_ADDR, POLKA_DATA_DIR, POLKA_LIBRARY_DIR, POLKA_TELEGRAM_TOKEN)
 `
 
 func main() {
@@ -129,7 +131,34 @@ func runServe(log *slog.Logger, args []string) error {
 			"login", "admin", "password", password)
 	}
 
-	srv := server.New(cfg, log, st, lib, users, nil, webFS)
+	srv, app := server.NewWithApp(cfg, log, st, lib, users, nil, webFS)
+
+	runCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	// The optional Telegram bot lives in its own package and is started only
+	// in server mode with a configured token. Without it this block is a no-op.
+	var botCancel context.CancelFunc
+	var botDone chan struct{}
+	if token := strings.TrimSpace(cfg.TelegramToken); token != "" {
+		botCtx, cancel := context.WithCancel(runCtx)
+		botCancel = cancel
+		botDone = make(chan struct{})
+		backend := app.TelegramBackend()
+		go func() {
+			defer close(botDone)
+			if err := tgbot.Run(botCtx, token, backend, log); err != nil {
+				log.Error("telegram bot", "error", err)
+			}
+		}()
+		log.Info("telegram bot enabled")
+	}
+	stopBot := func() {
+		if botCancel != nil {
+			botCancel()
+			<-botDone
+		}
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -139,13 +168,13 @@ func runServe(log *slog.Logger, args []string) error {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-errCh:
+		stopBot()
 		return err
-	case <-stop:
+	case <-runCtx.Done():
 	}
+	stopBot()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

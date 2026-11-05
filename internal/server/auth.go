@@ -127,6 +127,7 @@ func userJSON(u *auth.User) map[string]any {
 		"displayName": u.DisplayName,
 		"role":        u.Role,
 		"disabled":    u.Disabled,
+		"telegramId":  u.TelegramID,
 		"createdAt":   u.CreatedAt,
 	}
 }
@@ -229,6 +230,7 @@ type userPayload struct {
 	DisplayName *string `json:"displayName"`
 	Role        *string `json:"role"`
 	Disabled    *bool   `json:"disabled"`
+	TelegramID  *int64  `json:"telegramId"`
 	ReaderEmail *string `json:"readerEmail"`
 }
 
@@ -248,7 +250,11 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Role != nil {
 		role = *req.Role
 	}
-	u, err := s.users.CreateUser(r.Context(), req.Login, password, displayName, role)
+	var telegramID int64
+	if req.TelegramID != nil {
+		telegramID = *req.TelegramID
+	}
+	u, err := s.users.CreateUserWithTelegram(r.Context(), req.Login, password, displayName, role, telegramID)
 	if err != nil {
 		s.authAdminError(w, err)
 		return
@@ -275,6 +281,12 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		readerEmail = &email
+	}
+	if req.TelegramID != nil {
+		if err := s.users.SetTelegramID(r.Context(), id, *req.TelegramID); err != nil {
+			s.authAdminError(w, err)
+			return
+		}
 	}
 	if err := s.users.UpdateUser(r.Context(), id, req.Password, req.DisplayName, req.Role, req.Disabled); err != nil {
 		s.authAdminError(w, err)
@@ -314,6 +326,10 @@ func (s *Server) authAdminError(w http.ResponseWriter, err error) {
 		http.Error(w, "user not found", http.StatusNotFound)
 	case errors.Is(err, auth.ErrLoginTaken):
 		http.Error(w, "login already exists", http.StatusConflict)
+	case errors.Is(err, auth.ErrTelegramTaken):
+		http.Error(w, "telegram id is already linked", http.StatusConflict)
+	case errors.Is(err, auth.ErrInvalidTelegramID):
+		http.Error(w, "invalid telegram id", http.StatusBadRequest)
 	case errors.Is(err, auth.ErrLastAdmin):
 		http.Error(w, "cannot remove the last administrator", http.StatusConflict)
 	default:
