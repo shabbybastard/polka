@@ -7,8 +7,10 @@ import {
   genreSyncStatus,
   importInpx,
   importStatus,
+  ratingSyncStatus,
   saveSettings,
   syncGenres,
+  syncRatings,
   testSmtp,
   uploadBooks,
 } from "../api/manage";
@@ -17,6 +19,7 @@ import "./AdminLibraryPage.css";
 
 const ENRICH_SOURCES = () => [
   { id: "livelib", label: "LiveLib", hint: t("admin.livelib.hint") },
+  { id: "fantlab", label: t("source.fantlab"), hint: t("admin.fantlab.ratingHint") },
   { id: "google_books", label: "Google Books", hint: t("admin.google.hint") },
   { id: "open_library", label: "Open Library", hint: t("admin.openlibrary.hint") },
 ];
@@ -163,7 +166,11 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const [enrichment, setEnrichment] = useState(null);
   const [tagSources, setTagSources] = useState({ livelib: false, open_library: false });
   const [genreStatus, setGenreStatus] = useState(null);
+  const [genreStatusHidden, setGenreStatusHidden] = useState(false);
   const genrePolling = useRef(null);
+  const [ratingStatus, setRatingStatus] = useState(null);
+  const [ratingStatusHidden, setRatingStatusHidden] = useState(false);
+  const ratingPolling = useRef(null);
   const [similar, setSimilar] = useState(null);
   const [tastediveKey, setTastediveKey] = useState("");
   const [googleBooksKey, setGoogleBooksKey] = useState("");
@@ -181,6 +188,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       .then((st) => {
         setGenreStatus(st);
         if (st.running) {
+          setGenreStatusHidden(false);
           if (!genrePolling.current) {
             genrePolling.current = setInterval(pollGenreStatus, 1000);
           }
@@ -198,6 +206,33 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       if (genrePolling.current) {
         clearInterval(genrePolling.current);
         genrePolling.current = null;
+      }
+    };
+  }, []);
+
+  const pollRatingStatus = () => {
+    ratingSyncStatus()
+      .then((st) => {
+        setRatingStatus(st);
+        if (st.running) {
+          setRatingStatusHidden(false);
+          if (!ratingPolling.current) {
+            ratingPolling.current = setInterval(pollRatingStatus, 1000);
+          }
+        } else if (ratingPolling.current) {
+          clearInterval(ratingPolling.current);
+          ratingPolling.current = null;
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    pollRatingStatus();
+    return () => {
+      if (ratingPolling.current) {
+        clearInterval(ratingPolling.current);
+        ratingPolling.current = null;
       }
     };
   }, []);
@@ -244,6 +279,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   };
 
   const startGenreSync = (mode) => {
+    setGenreStatusHidden(false);
     if (!tagSources.livelib && !tagSources.open_library) {
       alert(t("admin.genres.noSource"));
       return;
@@ -252,6 +288,22 @@ const AdminLibraryPage = ({ onConfigChange }) => {
     syncGenres(mode)
       .then(() => pollGenreStatus())
       .catch((err) => alert(err.status === 409 ? t("admin.genres.running") : t("admin.genres.fail")));
+  };
+
+  const anyRatingSource = Object.values(enrichment ?? {}).some(Boolean);
+
+  const startRatingSync = (mode) => {
+    setRatingStatusHidden(false);
+    if (!anyRatingSource) {
+      alert(t("admin.ratings.noSource"));
+      return;
+    }
+    if (!confirm(t(mode === "empty" ? "admin.ratings.confirmEmpty" : "admin.ratings.confirm"))) return;
+    syncRatings(mode)
+      .then(() => pollRatingStatus())
+      .catch((err) =>
+        alert(err.status === 409 ? t("admin.ratings.running") : t("admin.ratings.fail"))
+      );
   };
 
   const toggleSimilar = (id) => {
@@ -406,6 +458,11 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const genrePercent =
     genreStatus && Number(genreStatus.total) > 0
       ? Math.min(100, Math.round((Number(genreStatus.processed) / Number(genreStatus.total)) * 100))
+      : 0;
+
+  const ratingPercent =
+    ratingStatus && Number(ratingStatus.total) > 0
+      ? Math.min(100, Math.round((Number(ratingStatus.processed) / Number(ratingStatus.total)) * 100))
       : 0;
 
   return (
@@ -763,6 +820,74 @@ const AdminLibraryPage = ({ onConfigChange }) => {
             </p>
           </div>
         )}
+        {enrichment && (
+          <div className="library-admin__genre-sync">
+            <div className="library-admin__genre-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => startRatingSync("all")}
+                disabled={Boolean(ratingStatus?.running) || !anyRatingSource}
+              >
+                {t("admin.ratings.sync")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => startRatingSync("empty")}
+                disabled={Boolean(ratingStatus?.running) || !anyRatingSource}
+              >
+                {t("admin.ratings.syncEmpty")}
+              </button>
+            </div>
+            {!ratingStatusHidden &&
+              ratingStatus &&
+              (ratingStatus.running || ratingStatus.processed > 0) && (
+                <div className="library-admin__genre-status">
+                  <div className="library-admin__genre-status-head">
+                    <span className="library-admin__genre-mode">
+                      {ratingStatus.mode === "empty"
+                        ? t("admin.ratings.modeEmpty")
+                        : t("admin.ratings.modeAll")}
+                    </span>
+                    <span className="library-admin__genre-progress">
+                      {t("admin.ratings.progress", {
+                        processed: Number(ratingStatus.processed).toLocaleString(),
+                        total: Number(ratingStatus.total).toLocaleString(),
+                        updated: Number(ratingStatus.updated).toLocaleString(),
+                      })}
+                    </span>
+                  </div>
+                  <div
+                    className="library-admin__genre-bar"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax={Number(ratingStatus.total) || 0}
+                    aria-valuenow={Number(ratingStatus.processed) || 0}
+                  >
+                    <span style={{ width: `${ratingPercent}%` }} />
+                  </div>
+                  {!ratingStatus.running && (
+                    <div className="library-admin__status-close">
+                      <button
+                        type="button"
+                        className="btn btn-link"
+                        onClick={() => setRatingStatusHidden(true)}
+                      >
+                        {t("admin.progress.close")}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            {!ratingStatusHidden && ratingStatus?.error && (
+              <div className="library-admin__genre-error">{ratingStatus.error}</div>
+            )}
+            <p className="library-admin__hint library-admin__genre-note">
+              {t("admin.ratings.background")}
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="library-admin__section">
@@ -813,34 +938,47 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                 {t("admin.genres.syncEmpty")}
               </button>
             </div>
-            {genreStatus && (genreStatus.running || genreStatus.processed > 0) && (
-              <div className="library-admin__genre-status">
-                <div className="library-admin__genre-status-head">
-                  <span className="library-admin__genre-mode">
-                    {genreStatus.mode === "empty"
-                      ? t("admin.genres.modeEmpty")
-                      : t("admin.genres.modeAll")}
-                  </span>
-                  <span className="library-admin__genre-progress">
-                    {t("admin.genres.progress", {
-                      processed: Number(genreStatus.processed).toLocaleString(),
-                      total: Number(genreStatus.total).toLocaleString(),
-                      updated: Number(genreStatus.updated).toLocaleString(),
-                    })}
-                  </span>
+            {!genreStatusHidden &&
+              genreStatus &&
+              (genreStatus.running || genreStatus.processed > 0) && (
+                <div className="library-admin__genre-status">
+                  <div className="library-admin__genre-status-head">
+                    <span className="library-admin__genre-mode">
+                      {genreStatus.mode === "empty"
+                        ? t("admin.genres.modeEmpty")
+                        : t("admin.genres.modeAll")}
+                    </span>
+                    <span className="library-admin__genre-progress">
+                      {t("admin.genres.progress", {
+                        processed: Number(genreStatus.processed).toLocaleString(),
+                        total: Number(genreStatus.total).toLocaleString(),
+                        updated: Number(genreStatus.updated).toLocaleString(),
+                      })}
+                    </span>
+                  </div>
+                  <div
+                    className="library-admin__genre-bar"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax={Number(genreStatus.total) || 0}
+                    aria-valuenow={Number(genreStatus.processed) || 0}
+                  >
+                    <span style={{ width: `${genrePercent}%` }} />
+                  </div>
+                  {!genreStatus.running && (
+                    <div className="library-admin__status-close">
+                      <button
+                        type="button"
+                        className="btn btn-link"
+                        onClick={() => setGenreStatusHidden(true)}
+                      >
+                        {t("admin.progress.close")}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div
-                  className="library-admin__genre-bar"
-                  role="progressbar"
-                  aria-valuemin="0"
-                  aria-valuemax={Number(genreStatus.total) || 0}
-                  aria-valuenow={Number(genreStatus.processed) || 0}
-                >
-                  <span style={{ width: `${genrePercent}%` }} />
-                </div>
-              </div>
-            )}
-            {genreStatus?.error && (
+              )}
+            {!genreStatusHidden && genreStatus?.error && (
               <div className="library-admin__genre-error">{genreStatus.error}</div>
             )}
             <p className="library-admin__hint library-admin__genre-note">

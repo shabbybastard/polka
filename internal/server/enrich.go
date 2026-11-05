@@ -16,7 +16,11 @@ import (
 func (s *Server) enrichEnabledCtx(ctx context.Context) map[string]bool {
 	enabled := make(map[string]bool, len(enrich.Sources))
 	for _, source := range enrich.Sources {
-		enabled[source] = s.users.GetSetting(ctx, "enrich."+source, "1") == "1"
+		def := "1"
+		if source == enrich.SourceFantLab {
+			def = "0"
+		}
+		enabled[source] = s.users.GetSetting(ctx, "enrich."+source, def) == "1"
 	}
 	return enabled
 }

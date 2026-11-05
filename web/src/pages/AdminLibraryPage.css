@@ -323,6 +323,17 @@
   font-size: 13px;
 }
 
+.library-admin__status-close {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.library-admin__status-close .btn {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .library-admin__genre-note {
   margin: 0;
 }

@@ -23,22 +23,23 @@ import (
 )
 
 type Server struct {
-	cfg       *config.Config
-	log       *slog.Logger
-	st        *store.Store
-	lib       *library.Library // nil if library-dir is not set
-	users     *auth.Service
-	desktop   *auth.User     // non-nil in desktop mode: owner auto-login
-	sync      *syncer.Syncer // non-nil in server synchronization mode
-	enrich    *enrich.Provider
-	cols      *collections.Service // book collections (collections.db)
-	conv      *conversions.Store   // background FB2 -> EPUB queue
-	srcs      sourcesState         // external collection sources sync
-	imp       importState          // state of the background inpx web import
-	genreSync genreSyncState       // background external genre loading
-	reader    readerCache          // parsed books for online reading
-	basic     basicCache           // verified Basic credentials (OPDS)
-	genres    genreCache           // genre counters for search
+	cfg        *config.Config
+	log        *slog.Logger
+	st         *store.Store
+	lib        *library.Library // nil if library-dir is not set
+	users      *auth.Service
+	desktop    *auth.User     // non-nil in desktop mode: owner auto-login
+	sync       *syncer.Syncer // non-nil in server synchronization mode
+	enrich     *enrich.Provider
+	cols       *collections.Service // book collections (collections.db)
+	conv       *conversions.Store   // background FB2 -> EPUB queue
+	srcs       sourcesState         // external collection sources sync
+	imp        importState          // state of the background inpx web import
+	genreSync  genreSyncState       // background external genre loading
+	ratingSync ratingSyncState      // manual external rating cache warming
+	reader     readerCache          // parsed books for online reading
+	basic      basicCache           // verified Basic credentials (OPDS)
+	genres     genreCache           // genre counters for search
 
 	loginLimiter *rateLimiter // throttle password guessing
 	guestLimiter *rateLimiter // throttle demo guest creation
@@ -139,6 +140,8 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			"POST /admin/settings",
 			"POST /admin/genres/sync",
 			"GET /admin/genres/status",
+			"POST /admin/ratings/sync",
+			"GET /admin/ratings/status",
 		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 				if !s.sync.Online() {
@@ -229,6 +232,8 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			mux.HandleFunc("POST /admin/smtp/test", s.adminOnly(s.handleSmtpTest))
 			mux.HandleFunc("POST /admin/genres/sync", s.adminOnly(s.handleGenreSyncStart))
 			mux.HandleFunc("GET /admin/genres/status", s.adminOnly(s.handleGenreSyncStatus))
+			mux.HandleFunc("POST /admin/ratings/sync", s.adminOnly(s.handleRatingSyncStart))
+			mux.HandleFunc("GET /admin/ratings/status", s.adminOnly(s.handleRatingSyncStatus))
 		}
 
 		// User data state for desktop clients

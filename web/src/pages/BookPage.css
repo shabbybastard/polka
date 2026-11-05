@@ -122,7 +122,18 @@ a.tag:hover {
 }
 
 .book-page__rating-block--external {
-  /* this block used to be a dimmed placeholder; now it's a working external rating */
+  /* This block used to be a dimmed placeholder; now it's a working external rating */
+  align-items: center;
+  text-align: center;
+}
+
+.book-page__external-ratings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  align-items: flex-start;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .book-page__rating-source a {
@@ -138,6 +149,13 @@ a.tag:hover {
 .book-page__rating-meta {
   font-size: 12px;
   color: var(--fg-muted);
+}
+
+.book-page__rating-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .book-page__genres {
@@ -344,6 +362,13 @@ a.tag:hover {
   .book-page__ratings {
     flex-direction: column;
     gap: 18px;
+  }
+
+  .book-page__external-ratings {
+    width: 100%;
+    gap: 18px;
+    margin-left: 0;
+    margin-right: 0;
   }
 }
 

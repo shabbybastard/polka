@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,15 +42,16 @@ const (
 	blockedBackoff = time.Hour
 
 	// Bump this when the parser or the cached result shape changes.
-	cacheVersion = 3
+	cacheVersion = 4
 )
 
 // Sources lists all sources in priority order.
-var Sources = []string{SourceLiveLib, SourceGoogleBooks, SourceOpenLibrary}
+var Sources = []string{SourceLiveLib, SourceFantLab, SourceGoogleBooks, SourceOpenLibrary}
 
 type Result struct {
 	Source       string   `json:"source"`
 	Rating       float64  `json:"rating"`
+	RatingMax    int      `json:"ratingMax,omitempty"`
 	RatingsCount int      `json:"ratingsCount,omitempty"`
 	InfoURL      string   `json:"infoUrl,omitempty"`
 	CoverURL     string   `json:"coverUrl,omitempty"`
@@ -195,6 +197,34 @@ func (p *Provider) Get(ctx context.Context, key, title, author string, enabled m
 // actual HTTP requests so a bulk run does not trip anti-bot protection.
 func (p *Provider) GetThrottled(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
 	return p.getEnrichment(ctx, key, title, author, enabled, tagSources, true)
+}
+
+// RefreshThrottled ignores a cached rating result for one book and fetches
+// it again. Used by the "empty only" manual rating job.
+func (p *Provider) RefreshThrottled(ctx context.Context, key, title, author string, enabled map[string]bool, tagSources map[string]bool) *Enrichment {
+	p.mu.Lock()
+	delete(p.cache, key)
+	p.mu.Unlock()
+	return p.GetThrottled(ctx, key, title, author, enabled, tagSources)
+}
+
+// HasCachedRating reports whether the cache already has a rating from one of
+// the currently enabled sources for this book.
+func (p *Provider) HasCachedRating(key string, enabled map[string]bool) bool {
+	sourceKey := enabledSourcesKey(enabled)
+	googleKey := googleKeyTag(p.googleAPIKeyValue())
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.cache[key]
+	if !ok || e.Result == nil || e.Version != cacheVersion || e.SourceKey != sourceKey || e.GoogleKey != googleKey {
+		return false
+	}
+	for _, src := range e.Result.Sources {
+		if enabled[src.Source] && src.Rating > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ForgetBook drops cached enrichment and similar-books data for one book.
@@ -343,6 +373,8 @@ func (p *Provider) fetch(ctx context.Context, source, title, author string, with
 	switch source {
 	case SourceLiveLib:
 		return p.fetchLiveLib(ctx, title, author, withTags, throttle)
+	case SourceFantLab:
+		return p.fetchFantLab(ctx, title, author, throttle)
 	case SourceGoogleBooks:
 		return p.fetchGoogleBooks(ctx, title, author, throttle)
 	case SourceOpenLibrary:
@@ -405,11 +437,29 @@ func (p *Provider) get(ctx context.Context, rawURL string, browser bool) ([]byte
 // already contains the author, rating and genres, so there is no reason to
 // open the book page with a second request.
 type livelibHit struct {
-	InfoURL string
-	Title   string
-	Authors []string
-	Rating  float64
-	Tags    []string
+	InfoURL      string
+	Title        string
+	Authors      []string
+	Rating       float64
+	RatingsCount int
+	Tags         []string
+}
+
+var livelibCountRe = regexp.MustCompile(`(?i)\(([\d\s\x{00A0}]+)\s*читател`)
+
+func livelibRatingCount(title string) int {
+	m := livelibCountRe.FindStringSubmatch(title)
+	if m == nil {
+		return 0
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, m[1])
+	count, _ := strconv.Atoi(digits)
+	return count
 }
 
 func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, includeTags, throttle bool) (*Result, error) {
@@ -429,9 +479,11 @@ func (p *Provider) fetchLiveLib(ctx context.Context, title, author string, inclu
 		return nil, nil // page fetched, but no confident match
 	}
 	res := &Result{
-		Source:  SourceLiveLib,
-		Rating:  hit.Rating,
-		InfoURL: p.LiveLibBase + hit.InfoURL,
+		Source:       SourceLiveLib,
+		Rating:       hit.Rating,
+		RatingMax:    5,
+		RatingsCount: hit.RatingsCount,
+		InfoURL:      p.LiveLibBase + hit.InfoURL,
 	}
 	if includeTags {
 		res.Tags = hit.Tags
@@ -479,6 +531,11 @@ func parseLiveLibHit(block *html.Node) (livelibHit, bool) {
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode {
+			if hit.RatingsCount == 0 {
+				if title := attr(n, "title"); title != "" {
+					hit.RatingsCount = livelibRatingCount(title)
+				}
+			}
 			switch {
 			case n.Data == "a" && hasClass(n, "title") && hit.Title == "":
 				hit.Title = nodeText(n)
@@ -675,6 +732,158 @@ func attr(n *html.Node, key string) string {
 	return ""
 }
 
+// --- FantLab ---
+
+type fantlabID string
+
+func (id *fantlabID) UnmarshalJSON(data []byte) error {
+	*id = fantlabID(strings.Trim(strings.TrimSpace(string(data)), `"`))
+	return nil
+}
+
+type fantlabFloat float64
+
+func (n *fantlabFloat) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+	if s == "" || s == "null" {
+		*n = 0
+		return nil
+	}
+	s = strings.Trim(s, `"`)
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return err
+	}
+	*n = fantlabFloat(v)
+	return nil
+}
+
+// fantlabBookType filters out articles, reviews and other non-book entries.
+// FantLab exposes the type in name_eng in search results and in
+// work_type_name on the work page.
+func fantlabBookType(nameEng, workTypeName string, workTypeID int) bool {
+	if workTypeID == 7 || workTypeID == 52 { // other, review
+		return false
+	}
+	for _, raw := range []string{nameEng, workTypeName} {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "article", "review", "other", "documental", "documentary":
+			return false
+		}
+	}
+	return true
+}
+
+func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throttle bool) (*Result, error) {
+	if throttle {
+		p.throttle(ctx, SourceFantLab)
+	}
+	body, err := p.get(ctx, p.FantLabBase+"/search-works?q="+url.QueryEscape(title), true)
+	if err != nil {
+		return nil, err
+	}
+	var search struct {
+		Matches []struct {
+			WorkID        fantlabID      `json:"work_id"`
+			RusName       string         `json:"rusname"`
+			Name          string         `json:"name"`
+			NameEng       string         `json:"name_eng"`
+			WorkTypeID    int            `json:"work_type_id"`
+			WorkTypeName  string         `json:"work_type_name"`
+			AutorRus      string         `json:"autor_rusname"`
+			AllRus        string         `json:"all_autor_rusname"`
+			AllName       string         `json:"all_autor_name"`
+			Rating        []fantlabFloat `json:"rating"`
+			Midmark       []fantlabFloat `json:"midmark"`
+			MidmarkWeight []fantlabFloat `json:"midmark_by_weight"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal(body, &search); err != nil {
+		return nil, err
+	}
+	var pickedID string
+	for _, m := range search.Matches {
+		if !fantlabBookType(m.NameEng, m.WorkTypeName, m.WorkTypeID) {
+			continue
+		}
+		if !titlesMatch(title, m.RusName) && !titlesMatch(title, m.Name) {
+			continue
+		}
+		if author != "" {
+			names := []string{m.AutorRus, m.AllRus, m.AllName}
+			if !authorsMatch(author, names) {
+				continue
+			}
+		}
+		if id := string(m.WorkID); id != "" && id != "0" {
+			pickedID = id
+			break
+		}
+	}
+	if pickedID == "" {
+		return nil, nil
+	}
+
+	if throttle {
+		p.throttle(ctx, SourceFantLab)
+	}
+	body, err = p.get(ctx, p.FantLabBase+"/work/"+pickedID, true)
+	if err != nil {
+		return nil, err
+	}
+	var work struct {
+		Rating struct {
+			Rating     fantlabFloat `json:"rating"`
+			TrueRating fantlabFloat `json:"true_rating"`
+			Voters     int          `json:"voters"`
+		} `json:"rating"`
+		ValMidmarkByWeight fantlabFloat `json:"val_midmark_by_weight"`
+		ValVoters          int          `json:"val_voters"`
+		WorkTypeID         int          `json:"work_type_id"`
+		WorkTypeName       string       `json:"work_type_name"`
+	}
+	if err := json.Unmarshal(body, &work); err != nil {
+		return nil, err
+	}
+	if !fantlabBookType("", work.WorkTypeName, work.WorkTypeID) {
+		return nil, nil
+	}
+
+	// FantLab rounds rating.rating to two decimals; true_rating keeps the
+	// unrounded value (8.52 for Dune, while rating.rating is 8.61).
+	raw := float64(work.Rating.TrueRating)
+	if raw <= 0 {
+		raw = float64(work.Rating.Rating)
+	}
+	if raw <= 0 {
+		raw = float64(work.ValMidmarkByWeight)
+	}
+	if raw <= 0 {
+		return nil, nil
+	}
+	rating := raw / 2
+	if rating > 5 {
+		rating = 5
+	}
+	if rating < 0 {
+		rating = 0
+	}
+	if rating <= 0 {
+		return nil, nil
+	}
+	count := work.Rating.Voters
+	if count <= 0 {
+		count = work.ValVoters
+	}
+	return &Result{
+		Source:       SourceFantLab,
+		Rating:       rating,
+		RatingMax:    5,
+		RatingsCount: count,
+		InfoURL:      "https://fantlab.ru/work" + pickedID,
+	}, nil
+}
+
 // --- Google Books ---
 
 func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string, throttle bool) (*Result, error) {
@@ -718,6 +927,7 @@ func (p *Provider) fetchGoogleBooks(ctx context.Context, title, author string, t
 		return &Result{
 			Source:       SourceGoogleBooks,
 			Rating:       v.AverageRating,
+			RatingMax:    5,
 			RatingsCount: v.RatingsCount,
 			InfoURL:      v.InfoLink,
 			CoverURL:     strings.Replace(v.ImageLinks.Thumbnail, "http://", "https://", 1),
@@ -765,6 +975,7 @@ func (p *Provider) fetchOpenLibrary(ctx context.Context, title, author string, w
 		r := &Result{
 			Source:       SourceOpenLibrary,
 			Rating:       doc.RatingsAverage,
+			RatingMax:    5,
 			RatingsCount: doc.RatingsCount,
 			InfoURL:      p.OpenLibraryBase + doc.Key,
 			Tags:         tags,

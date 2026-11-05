@@ -23,7 +23,7 @@ const livelibHTML = `<html><body>
         <a class="label-genre" href="/genre/2">Роман</a>
         <a class="label-genre" href="/genre/3">Русская литература</a>
       </div>
-      <div class="brow-stats-outer"><span class="rating-book marg-right"><span class="rating-value stars-color-orange" itemprop="ratingValue">4,5</span></span></div>
+      <div class="brow-stats-outer"><span class="rating-book marg-right"><span class="rating-value stars-color-orange" itemprop="ratingValue">4,5</span><span title="Рейтинг 4.500 (1 234 читателей, рейтинг ожидания 4.000)"></span></span></div>
     </div>
   </div>
 </div>
@@ -52,6 +52,7 @@ const livelibWrongFirstHTML = `<html><body>
         <a class="label-genre" href="/genre/6">Современная зарубежная литература</a>
       </div>
       <span class="rating-value" itemprop="ratingValue">3.9</span>
+      <span title="Рейтинг 3.902 (996 читателей, рейтинг ожидания 4.000)"></span>
     </div>
   </div>
 </div>
@@ -116,7 +117,7 @@ func TestEnrichAllSources(t *testing.T) {
 	if len(res.Sources) != 3 || res.Negative {
 		t.Fatalf("sources = %d, negative = %v", len(res.Sources), res.Negative)
 	}
-	if res.Primary.Source != SourceLiveLib || res.Primary.Rating != 4.5 {
+	if res.Primary.Source != SourceLiveLib || res.Primary.Rating != 4.5 || res.Primary.RatingsCount != 1234 {
 		t.Errorf("primary = %+v", res.Primary)
 	}
 	if res.ExtraSourceCount != 2 {
@@ -230,8 +231,8 @@ func TestLiveLibPicksBookMatchingTitleAndAuthor(t *testing.T) {
 		t.Fatalf("no match: %+v", res)
 	}
 	got := res.Primary
-	if got.Rating != 3.9 {
-		t.Errorf("rating = %v, want 3.9", got.Rating)
+	if got.Rating != 3.9 || got.RatingsCount != 996 {
+		t.Errorf("rating = %v/%d, want 3.9/996", got.Rating, got.RatingsCount)
 	}
 	if !strings.HasSuffix(got.InfoURL, "/book/1007412814-vot-ya-dzhonatan-safran-foer") {
 		t.Errorf("infoUrl = %q", got.InfoURL)

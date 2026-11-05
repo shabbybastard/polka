@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { t } from "../i18n";
 import AdminLibraryPage from "./AdminLibraryPage";
@@ -10,8 +10,10 @@ vi.mock("../api/manage", () => ({
   genreSyncStatus: vi.fn(),
   importInpx: vi.fn(),
   importStatus: vi.fn(),
+  ratingSyncStatus: vi.fn(),
   saveSettings: vi.fn(),
   syncGenres: vi.fn(),
+  syncRatings: vi.fn(),
   testSmtp: vi.fn(),
   uploadBooks: vi.fn(),
 }));
@@ -24,7 +26,14 @@ vi.mock("../api/collections", () => ({
   syncCollectionSource: vi.fn(),
 }));
 
-import { fetchConversions, fetchSettings, genreSyncStatus, importStatus, saveSettings } from "../api/manage";
+import {
+  fetchConversions,
+  fetchSettings,
+  genreSyncStatus,
+  importStatus,
+  ratingSyncStatus,
+  saveSettings,
+} from "../api/manage";
 import { fetchCollections } from "../api/collections";
 
 const settings = {
@@ -46,6 +55,7 @@ describe("AdminLibraryPage", () => {
     fetchConversions.mockResolvedValue({ jobs: [] });
     importStatus.mockResolvedValue({ running: false });
     genreSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
+    ratingSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
     fetchCollections.mockResolvedValue({ collections: [] });
     saveSettings.mockResolvedValue({ ...settings, homeHero: false });
     const onConfigChange = vi.fn();
@@ -57,7 +67,10 @@ describe("AdminLibraryPage", () => {
     );
 
     const livelib = await screen.findByLabelText(t("admin.tags.livelib"));
-    expect(screen.getByRole("button", { name: t("admin.genres.syncEmpty") })).toBeInTheDocument();
+    const genresSection = screen.getByRole("heading", { name: t("admin.tags") }).closest("section");
+    expect(
+      within(genresSection).getByRole("button", { name: t("admin.genres.syncEmpty") })
+    ).toBeInTheDocument();
     fireEvent.click(livelib);
     await waitFor(() =>
       expect(saveSettings).toHaveBeenCalledWith({

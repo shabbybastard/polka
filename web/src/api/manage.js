@@ -82,6 +82,10 @@ export const syncGenres = (mode = "all") =>
 
 export const genreSyncStatus = () => api.getJson("admin/genres/status");
 
+export const syncRatings = (mode = "all") =>
+  post(`admin/ratings/sync?mode=${encodeURIComponent(mode)}`);
+export const ratingSyncStatus = () => api.getJson("admin/ratings/status");
+
 export const testSmtp = () => post("admin/smtp/test");
 
 export const saveSettings = async (settings) => {

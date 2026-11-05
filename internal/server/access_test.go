@@ -200,6 +200,8 @@ func TestRouteAccess(t *testing.T) {
 		{"GET", "/admin/settings", ""},
 		{"GET", "/admin/genres/status", ""},
 		{"POST", "/admin/genres/sync", ""},
+		{"GET", "/admin/ratings/status", ""},
+		{"POST", "/admin/ratings/sync", ""},
 		{"GET", "/admin/users", ""},
 		{"POST", "/admin/books/" + id + "/delete", ""},
 		{"POST", "/admin/books/" + id + "/restore", ""},

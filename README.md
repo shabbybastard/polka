@@ -32,16 +32,16 @@ mobile reading app.
   Open Library / Google Books.
 - **Reading lists & ratings.** Build custom lists, mark books you want to read,
   rate books 1–5 — average ratings are visible to everyone on your server.
-  External ratings (LiveLib, Google Books, Open Library) can be enabled per
-  source by the admin. External genres (LiveLib genres and Open Library
+  External ratings (LiveLib, FantLab, Google Books, Open Library) can be
+  enabled per source by the admin. External genres (LiveLib genres and Open Library
   subjects) can be merged into the catalog; both sources are off by default
   and disabling one removes the genres it contributed.
 - **Admin tools.** Edit a book's title, authors (one "last first middle" field),
   EPUB metadata and cover, remove external ratings, genres and links for a
   single book, change user display names, hide the home-page hero banner, reset
-  a reader's progress when a position is no longer wanted, and bulk-load external
-  genres for the whole catalog or only for books without genres (throttled
-  server-side job).
+  a reader's progress when a position is no longer wanted, bulk-load external
+  genres for the whole catalog or only for books without genres, and manually
+  warm the external rating cache (throttled server-side jobs).
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of

@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { formatRating } from "../utils/rating";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/api";
@@ -493,6 +494,7 @@ const BookPage = ({ user, sync }) => {
   const initials = (Title || "").trim().slice(0, 2).toUpperCase();
 
   const SOURCE_LABELS = {
+    fantlab: t("source.fantlab"),
     google_books: "Google Books",
     open_library: "Open Library",
     livelib: "LiveLib",
@@ -588,30 +590,36 @@ const BookPage = ({ user, sync }) => {
                 <RatingStars value={LibRate} size="lg" />
               </div>
             )}
-            {externalRatings.map((source) => (
-              <div
-                className="book-page__rating-block book-page__rating-block--external"
-                key={source.source}
-              >
-                <span className="book-page__rating-source">
-                  {source.infoUrl ? (
-                    <a href={source.infoUrl} target="_blank" rel="noreferrer">
-                      {SOURCE_LABELS[source.source] ?? source.source}
-                    </a>
-                  ) : (
-                    SOURCE_LABELS[source.source] ?? source.source
-                  )}
-                </span>
-                <RatingStars value={source.rating} size="lg" max={5} />
-                {source.ratingsCount > 0 && (
-                  <span className="book-page__rating-meta">
-                    {t("book.rating.count", {
-                      n: Number(source.ratingsCount).toLocaleString(),
-                    })}
-                  </span>
-                )}
+            {externalRatings.length > 0 && (
+              <div className="book-page__external-ratings">
+                {externalRatings.map((source) => (
+                  <div
+                    className="book-page__rating-block book-page__rating-block--external"
+                    key={source.source}
+                  >
+                    <span className="book-page__rating-source">
+                      {source.infoUrl ? (
+                        <a href={source.infoUrl} target="_blank" rel="noreferrer">
+                          {SOURCE_LABELS[source.source] ?? source.source}
+                        </a>
+                      ) : (
+                        SOURCE_LABELS[source.source] ?? source.source
+                      )}
+                    </span>
+                    <span className="book-page__rating-value">
+                      {formatRating(source.rating, source.ratingMax)}
+                    </span>
+                    {source.ratingsCount > 0 && (
+                      <span className="book-page__rating-meta">
+                        {t("book.rating.count", {
+                          n: Number(source.ratingsCount).toLocaleString(),
+                        })}
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
 
           {data?.genresList?.length ? (
