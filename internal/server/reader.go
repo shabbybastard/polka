@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/library"
 )
 
 // readerCache keeps the last few parsed books in memory:

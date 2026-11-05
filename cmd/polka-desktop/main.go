@@ -20,13 +20,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/config"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/server"
-	"github.com/vestigiumincaligne/polka/internal/store"
-	"github.com/vestigiumincaligne/polka/internal/syncer"
-	"github.com/vestigiumincaligne/polka/web"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/server"
+	"github.com/shabbybastard/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/syncer"
+	"github.com/shabbybastard/polka/web"
 )
 
 var version = "dev" // overridden at build time via -ldflags

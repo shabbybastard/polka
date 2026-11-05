@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 const sep = "\x04"

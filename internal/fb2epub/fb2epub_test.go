@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vestigiumincaligne/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/library"
 )
 
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

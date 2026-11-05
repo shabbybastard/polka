@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/importer"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/importer"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 const (

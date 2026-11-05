@@ -11,15 +11,15 @@ import (
 	"path/filepath"
 	"time"
 
-	bundled "github.com/vestigiumincaligne/polka/collections"
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/collections"
-	"github.com/vestigiumincaligne/polka/internal/config"
-	"github.com/vestigiumincaligne/polka/internal/conversions"
-	"github.com/vestigiumincaligne/polka/internal/enrich"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
-	"github.com/vestigiumincaligne/polka/internal/syncer"
+	bundled "github.com/shabbybastard/polka/collections"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/collections"
+	"github.com/shabbybastard/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/conversions"
+	"github.com/shabbybastard/polka/internal/enrich"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/syncer"
 )
 
 type Server struct {

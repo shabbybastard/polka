@@ -13,10 +13,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/config"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 const testFB2 = `<?xml version="1.0" encoding="UTF-8"?>

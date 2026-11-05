@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/genres"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/genres"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // OPDS 1.2 (Atom) — catalog for mobile readers: Moon+ Reader,

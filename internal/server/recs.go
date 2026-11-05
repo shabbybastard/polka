@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/enrich"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/enrich"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // Recommendations: personal shelves on the home page and "similar books"

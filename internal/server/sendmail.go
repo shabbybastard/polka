@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/mailer"
+	"github.com/shabbybastard/polka/internal/mailer"
 )
 
 // Sending a book to an e-reader by e-mail (send-to-Kindle and friends):

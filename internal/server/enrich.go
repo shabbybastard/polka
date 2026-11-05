@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"encoding/json"
-	"github.com/vestigiumincaligne/polka/internal/collections/sources"
+	"github.com/shabbybastard/polka/internal/collections/sources"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/enrich"
+	"github.com/shabbybastard/polka/internal/enrich"
 )
 
 // enrichEnabled builds a map of enabled sources from settings.

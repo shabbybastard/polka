@@ -17,10 +17,10 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/config"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // newManageServer — a server with an empty library and an admin, already logged in.

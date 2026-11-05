@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/auth"
 )
 
 func TestCatalogAndSeriesEndpoints(t *testing.T) {

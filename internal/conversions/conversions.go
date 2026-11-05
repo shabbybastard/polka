@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/sqlitedrv"
+	"github.com/shabbybastard/polka/internal/sqlitedrv"
 )
 
 type Status string

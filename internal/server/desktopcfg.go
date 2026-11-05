@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/syncer"
+	"github.com/shabbybastard/polka/internal/syncer"
 )
 
 // Server connection configuration from the desktop client UI.

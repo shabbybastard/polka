@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vestigiumincaligne/polka/internal/sqlitedrv"
+	"github.com/shabbybastard/polka/internal/sqlitedrv"
 )
 
 // newLibrary imports a small but varied catalog:

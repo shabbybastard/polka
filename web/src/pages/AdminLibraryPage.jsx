@@ -606,7 +606,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         <h2>{t("admin.collections")}</h2>
         <p className="library-admin__hint">
           {t("admin.collections.hint")}{" "}
-          <a href="https://github.com/vestigiumincaligne/polka/tree/main/collections" target="_blank" rel="noreferrer">
+          <a href="https://github.com/shabbybastard/polka/tree/main/collections" target="_blank" rel="noreferrer">
             {t("admin.collections.examples")}
           </a>
           {" · "}

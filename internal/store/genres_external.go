@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/vestigiumincaligne/polka/internal/genres"
+	"github.com/shabbybastard/polka/internal/genres"
 )
 
 // External genre sources (LiveLib, Open Library) are folded into the

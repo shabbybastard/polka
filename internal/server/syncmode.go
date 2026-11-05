@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/syncer"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/syncer"
 )
 
 // Desktop client sync mode: the catalog is proxied to the server,

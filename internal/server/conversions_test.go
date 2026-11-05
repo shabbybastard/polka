@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/conversions"
-	"github.com/vestigiumincaligne/polka/internal/fb2epub"
+	"github.com/shabbybastard/polka/internal/conversions"
+	"github.com/shabbybastard/polka/internal/fb2epub"
 )
 
 // conversionUpload uploads one file and decodes the 202/200 response.

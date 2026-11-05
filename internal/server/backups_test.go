@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/config"
 )
 
 func TestCleanupBackups(t *testing.T) {

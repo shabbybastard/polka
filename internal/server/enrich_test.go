@@ -6,7 +6,7 @@ import (
 	"net/http/cookiejar"
 	"testing"
 
-	"github.com/vestigiumincaligne/polka/internal/enrich"
+	"github.com/shabbybastard/polka/internal/enrich"
 )
 
 func newJar(t *testing.T) *cookiejar.Jar {

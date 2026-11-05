@@ -6,8 +6,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/vestigiumincaligne/polka/internal/inpx"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/inpx"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // Progress reports import progress: phase is "loading" or "indexing".

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/collections"
+	"github.com/shabbybastard/polka/internal/collections"
 )
 
 // Forbes scrapes articles tagged "Подборки книг" on forbes.ru. Each article

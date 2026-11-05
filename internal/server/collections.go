@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/collections"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/collections"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // Collection shelves: ids of the form "collection_<slug>", so that getShelfBooks

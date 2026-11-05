@@ -6,7 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/vestigiumincaligne/polka/internal/sqlitedrv"
+	"github.com/shabbybastard/polka/internal/sqlitedrv"
 )
 
 type Store struct {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/auth"
 )
 
 // fakeServer imitates the parts of a Polka server the syncer talks to:

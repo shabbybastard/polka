@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/sqlitedrv"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/sqlitedrv"
 )
 
 // Config is the server connection; stored in data-dir/sync.json.

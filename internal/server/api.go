@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vestigiumincaligne/polka/internal/genres"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/genres"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // bookJSON converts a book to the format expected by the frontend.

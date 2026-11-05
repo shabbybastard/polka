@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/auth"
 )
 
 const sessionCookie = "polka_session"

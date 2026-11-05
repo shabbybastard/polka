@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/auth"
 )
 
 // GET /api/v1/sync/state — state of user data

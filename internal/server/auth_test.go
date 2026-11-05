@@ -13,9 +13,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
-	"github.com/vestigiumincaligne/polka/internal/config"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/config"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 // newAuthServer — a server in auth=required mode with a single administrator.

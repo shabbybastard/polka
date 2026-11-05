@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/conversions"
-	"github.com/vestigiumincaligne/polka/internal/fb2epub"
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/conversions"
+	"github.com/shabbybastard/polka/internal/fb2epub"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 const (

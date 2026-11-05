@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/net/html/charset"
 
-	"github.com/vestigiumincaligne/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/library"
 )
 
 type imageFile struct {

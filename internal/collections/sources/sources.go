@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/collections"
+	"github.com/shabbybastard/polka/internal/collections"
 )
 
 // Source is an external source of collections.

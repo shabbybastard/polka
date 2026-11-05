@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/sqlitedrv"
+	"github.com/shabbybastard/polka/internal/sqlitedrv"
 	"golang.org/x/crypto/argon2"
 )
 

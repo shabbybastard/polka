@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vestigiumincaligne/polka/internal/library"
-	"github.com/vestigiumincaligne/polka/internal/store"
+	"github.com/shabbybastard/polka/internal/library"
+	"github.com/shabbybastard/polka/internal/store"
 )
 
 func tinyPNG(t *testing.T) []byte {

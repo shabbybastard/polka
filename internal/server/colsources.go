@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vestigiumincaligne/polka/internal/collections/sources"
+	"github.com/shabbybastard/polka/internal/collections/sources"
 )
 
 // External collection sources (Forbes…): disabled by default, enabled in

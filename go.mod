@@ -1,4 +1,4 @@
-module github.com/vestigiumincaligne/polka
+module github.com/shabbybastard/polka
 
 go 1.26.0
 

@@ -134,15 +134,6 @@ make build        # builds web UI + bin/polka + bin/polka-desktop
 ./bin/polka serve --library-dir /path/to/books
 ```
 
-To pull a feature from the original project later, add its repository as a
-remote and merge it deliberately:
-
-```sh
-git remote add upstream https://github.com/vestigiumincaligne/polka
-git fetch upstream --tags
-git merge upstream/main        # or cherry-pick a single feature
-```
-
 ## Importing a large catalog
 
 Polka understands `.inpx` index files (MyHomeLib / Flibusta format) — both
@@ -249,14 +240,12 @@ default.
 
 ## About this fork
 
-This repository is a fork of
-[vestigiumincaligne/polka](https://github.com/vestigiumincaligne/polka).
 The original Polka was created by its authors and contributors; all credit for
-the upstream project belongs to them. Please support the original project and
-report upstream bugs there.
+the upstream project belongs to them.
 
-The current fork state is based on upstream v0.1.22. Upstream features will be pulled in
-selectively when they are worth taking.
+This fork is maintained in this repository. Its current state is based on
+upstream v0.1.22; upstream features may be pulled in selectively when they are
+worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
 (current: `v0.1.22-fork.5`). The binary reports the same version without the

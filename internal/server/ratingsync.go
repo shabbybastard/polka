@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/vestigiumincaligne/polka/internal/enrich"
+	"github.com/shabbybastard/polka/internal/enrich"
 )
 
 // Manual warming of the external rating cache for the whole library.

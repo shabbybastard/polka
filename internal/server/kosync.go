@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/auth"
 )
 
 // KOReader progress sync (the kosync protocol, as implemented by
