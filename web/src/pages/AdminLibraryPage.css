@@ -326,7 +326,35 @@
 }
 
 .library-admin__genre-progress {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   color: var(--fg-muted, #777);
+}
+
+.library-admin__import-status,
+.library-admin__conversion-card {
+  margin-top: 16px;
+  max-width: 680px;
+}
+
+.library-admin__conversion-card .library-admin__conversions {
+  margin-top: 12px;
+}
+
+.library-admin__status-note {
+  margin-top: 8px;
+  color: #8a5a00;
+  font-size: 13px;
+}
+
+.library-admin__genre-progress.is-done {
+  color: #1b7f3b;
+}
+
+.library-admin__genre-progress.is-error {
+  color: #b3261e;
 }
 
 .library-admin__genre-bar {
@@ -342,6 +370,28 @@
   border-radius: inherit;
   background: var(--success, #2e9d6e);
   transition: width 0.3s ease;
+}
+
+.library-admin__genre-bar > span.is-running {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--success, #2e9d6e) 0,
+    var(--success, #2e9d6e) 8px,
+    rgba(255, 255, 255, 0.35) 8px,
+    rgba(255, 255, 255, 0.35) 16px
+  );
+  background-size: 23px 23px;
+  animation: library-admin-progress-stripes 0.9s linear infinite;
+}
+
+.library-admin__genre-bar > span.is-error {
+  background: var(--danger, #b3261e);
+}
+
+@keyframes library-admin-progress-stripes {
+  to {
+    background-position: 23px 0;
+  }
 }
 
 .library-admin__genre-error {

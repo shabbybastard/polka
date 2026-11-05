@@ -62,9 +62,10 @@ var messages = map[string]map[string]string{
 		"idRole":            "Роль: %s",
 		"idUserID":          "ID пользователя: %d",
 		"idTelegram":        "Telegram ID: %d",
-		"roleAdmin":         "администратор",
+		"roleAdmin":         "админ",
 		"roleUser":          "читатель",
 		"menu":              "Меню",
+		"home":              "В начало",
 		"prev":              "Назад",
 		"next":              "Дальше",
 		"statsText":         "Книг: %d\nПользователей: %d\nВерсия: %s\nUptime: %s\nЗанято: %s\nСвободно: %s",
@@ -159,6 +160,7 @@ var messages = map[string]map[string]string{
 		"roleAdmin":         "administrator",
 		"roleUser":          "reader",
 		"menu":              "Menu",
+		"home":              "Home",
 		"prev":              "Back",
 		"next":              "Next",
 		"statsText":         "Books: %d\nUsers: %d\nVersion: %s\nUptime: %s\nUsed: %s\nFree: %s",
@@ -191,6 +193,41 @@ var messages = map[string]map[string]string{
 		"btnLanguage":       "Language",
 		"btnHelp":           "Help",
 	},
+}
+
+func botCommands(lang string) []BotCommand {
+	if lang == "ru" {
+		return []BotCommand{
+			{"start", "Начать"},
+			{"search", "Поиск по библиотеке"},
+			{"title", "Поиск по названию"},
+			{"author", "Книги автора"},
+			{"series", "Книги серии"},
+			{"random", "Случайная книга"},
+			{"recent", "Недавние книги"},
+			{"id", "Моя учётная запись"},
+			{"language", "Язык бота"},
+			{"stats", "Статистика (админ)"},
+			{"status", "Состояние (админ)"},
+			{"cancel", "Отменить ввод"},
+			{"help", "Помощь"},
+		}
+	}
+	return []BotCommand{
+		{"start", "Start"},
+		{"search", "Search the library"},
+		{"title", "Search by title"},
+		{"author", "Books by author"},
+		{"series", "Books in a series"},
+		{"random", "Random book"},
+		{"recent", "Recently added"},
+		{"id", "My account"},
+		{"language", "Bot language"},
+		{"stats", "Statistics (admin)"},
+		{"status", "Status (admin)"},
+		{"cancel", "Cancel input"},
+		{"help", "Help"},
+	}
 }
 
 func (b *Bot) tr(lang, key string, args ...any) string {

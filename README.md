@@ -234,7 +234,9 @@ There is no self-registration and no linking command in the chat. Every bot
 update re-reads the account, so disabling a user or changing the role takes
 effect immediately. `/stats` and `/status` are admin-only; book uploads are
 admin-only and limited to 50 per hour per user (configurable in
-*Manage → Library*). The bot shows covers, metadata, Polka ratings, reading
+*Manage → Library*). Its commands are registered in Telegram's menu button
+(the side command list), and each book card is sent as one HTML-formatted
+photo/caption message. The bot shows covers, metadata, Polka ratings, reading
 progress and search results, but it never sends book files. Temporary
 downloads are deleted after ingestion.
 
@@ -268,8 +270,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.5`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.5`, and the version for local
+(current: `v0.1.22-fork.6`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.6`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

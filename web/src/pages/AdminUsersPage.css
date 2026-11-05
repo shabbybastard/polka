@@ -24,19 +24,31 @@
 }
 
 .users-table th {
-  text-align: left;
+  text-align: center;
   font-weight: 600;
   color: var(--fg-muted, #777);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 8px 12px;
+  padding: 8px 10px;
   border-bottom: 2px solid var(--border, rgba(0, 0, 0, 0.1));
 }
 
 .users-table td {
-  padding: 10px 12px;
+  text-align: center;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.06));
+  vertical-align: middle;
+}
+
+.users-table th:nth-child(3),
+.users-table td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.users-table input {
+  text-align: center;
 }
 
 .users-table tr.is-disabled td {
@@ -48,8 +60,13 @@
   color: #1a1714;
 }
 
+.users-table .tag {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
 .users-table__email {
-  width: 190px;
+  width: 180px;
   font: inherit;
   font-size: 13px;
   padding: 7px 10px;
@@ -60,7 +77,9 @@
 }
 
 .users-table__telegram {
-  width: 150px;
+  width: calc(12ch + 24px);
+  max-width: 122px;
+  font-variant-numeric: tabular-nums;
 }
 
 .users-table__email:focus {
@@ -70,16 +89,15 @@
 }
 
 .users-table__actions-cell {
-  padding-left: 0;
+  padding-left: 10px;
 }
 
 .users-table__actions {
   display: grid;
-  grid-template-columns: 96px 68px 126px 84px 62px;
+  grid-template-columns: 88px 56px 116px 72px 58px;
   align-items: center;
-  justify-content: end;
+  justify-content: center;
   gap: 4px;
-  white-space: nowrap;
 }
 
 .users-table__actions .btn {
@@ -88,6 +106,7 @@
   padding: 2px 4px;
   font-size: 12px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .users-table__danger {
@@ -125,14 +144,11 @@
   outline-offset: 1px;
 }
 
-/* Mobile: the table scrolls horizontally */
+/* Fallback for narrow screens: only scroll when the table's min-content
+   width really exceeds the viewport. */
 .users-table-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   margin: 0 -16px;
   padding: 0 16px;
-}
-
-.users-table {
-  min-width: 1340px;
 }

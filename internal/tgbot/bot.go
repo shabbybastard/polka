@@ -49,6 +49,7 @@ type Bot struct {
 	mu       sync.Mutex
 	sessions map[int64]*session
 	uploads  map[int64][]time.Time
+	menus    map[int64][]int64 // bot messages that contain inline menus
 }
 
 func New(api API, backend Backend, log *slog.Logger) *Bot {
@@ -61,6 +62,7 @@ func New(api API, backend Backend, log *slog.Logger) *Bot {
 		log:      log,
 		sessions: make(map[int64]*session),
 		uploads:  make(map[int64][]time.Time),
+		menus:    make(map[int64][]int64),
 	}
 }
 
@@ -85,6 +87,9 @@ func Run(ctx context.Context, token string, backend Backend, log *slog.Logger) e
 // Run polls until the context is cancelled. It deliberately uses long
 // polling rather than a webhook, so no public URL is required.
 func (b *Bot) Run(ctx context.Context) error {
+	menuCtx, cancelMenu := context.WithTimeout(ctx, 10*time.Second)
+	b.configureMenu(menuCtx)
+	cancelMenu()
 	var offset int64
 	for {
 		if ctx.Err() != nil {
@@ -105,6 +110,21 @@ func (b *Bot) Run(ctx context.Context) error {
 			offset = update.UpdateID + 1
 			b.handleUpdate(ctx, update)
 		}
+	}
+}
+
+// configureMenu populates Telegram's built-in menu button (the side command
+// list in clients). The default language is Russian; English clients get the
+// localized command descriptions through language_code=en.
+func (b *Bot) configureMenu(ctx context.Context) {
+	if err := b.api.SetChatMenuButton(ctx); err != nil {
+		b.log.Warn("telegram menu button", "error", err)
+	}
+	if err := b.api.SetMyCommands(ctx, botCommands("ru"), ""); err != nil {
+		b.log.Warn("telegram commands", "error", err)
+	}
+	if err := b.api.SetMyCommands(ctx, botCommands("en"), "en"); err != nil {
+		b.log.Warn("telegram commands", "error", err)
 	}
 }
 
@@ -164,7 +184,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 		b.runQuery(ctx, msg.Chat.ID, 0, lang, kind, text, false)
 		return
 	}
-	b.sendText(ctx, msg.Chat.ID, b.tr(lang, "unknown"), SendOptions{Inline: b.mainMenu(lang, user.IsAdmin())})
+	b.sendText(ctx, msg.Chat.ID, b.tr(lang, "unknown"), SendOptions{})
 }
 
 func (b *Bot) authorize(ctx context.Context, from *TGUser) (*User, string, bool) {
@@ -198,19 +218,18 @@ func (b *Bot) handleCommand(ctx context.Context, msg *Message, user *User, lang,
 	cmd := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	arg := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
 	b.clearAwaiting(msg.Chat.ID)
+	// Any explicit command starts a fresh screen: drop stale inline keyboards
+	// left by previous searches or menus.
+	b.clearMenus(ctx, msg.Chat.ID)
 
 	switch cmd {
 	case "/start":
-		// Telegram accepts only one reply_markup per message: send the
-		// persistent keyboard first, then the inline menu separately.
-		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "start"), SendOptions{
-			Reply: b.replyKeyboard(lang, user.IsAdmin()),
-		})
-		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "menu"), SendOptions{
-			Inline: b.mainMenu(lang, user.IsAdmin()),
-		})
+		// The global menu lives in Telegram's side command list, configured
+		// with setMyCommands/setChatMenuButton when the bot starts. Removing
+		// the old persistent keyboard upgrades existing chats seamlessly.
+		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "start"), SendOptions{RemoveKeyboard: true})
 	case "/help":
-		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "help"), SendOptions{Inline: b.mainMenu(lang, user.IsAdmin())})
+		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "help"), SendOptions{})
 	case "/search", "/title", "/author", "/series":
 		kind := strings.TrimPrefix(cmd, "/")
 		if arg == "" {
@@ -242,7 +261,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *Message, user *User, lang,
 	case "/cancel":
 		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "cancelled"), SendOptions{})
 	default:
-		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "unknown"), SendOptions{Inline: b.mainMenu(lang, user.IsAdmin())})
+		b.sendText(ctx, msg.Chat.ID, b.tr(lang, "unknown"), SendOptions{})
 	}
 }
 
@@ -271,7 +290,7 @@ func (b *Bot) handleCallback(ctx context.Context, cq *CallbackQuery) {
 
 	switch {
 	case data == "menu:main":
-		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "start"), b.mainMenu(lang, user.IsAdmin()))
+		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "start"), nil)
 	case data == "menu:search":
 		b.setAwaiting(chatID, "search")
 		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "searchPrompt"), nil)
@@ -294,7 +313,7 @@ func (b *Bot) handleCallback(ctx context.Context, cq *CallbackQuery) {
 	case data == "menu:lang":
 		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "languageMenu"), b.languageMenu())
 	case data == "menu:help":
-		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "help"), b.mainMenu(lang, user.IsAdmin()))
+		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "help"), nil)
 	case strings.HasPrefix(data, "lang:"):
 		next := strings.TrimPrefix(data, "lang:")
 		if next != "ru" && next != "en" {
@@ -305,7 +324,7 @@ func (b *Bot) handleCallback(ctx context.Context, cq *CallbackQuery) {
 			return
 		}
 		lang = next
-		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "languageSaved", languageTitle(lang)), b.mainMenu(lang, user.IsAdmin()))
+		b.editOrSend(ctx, chatID, messageID, cq, b.tr(lang, "languageSaved", languageTitle(lang)), nil)
 	case strings.HasPrefix(data, "book:"):
 		id, err := strconv.ParseInt(strings.TrimPrefix(data, "book:"), 10, 64)
 		if err == nil {
@@ -385,7 +404,7 @@ func (b *Bot) showSearch(ctx context.Context, chatID, messageID int64, lang, kin
 		books = books[:pageSize]
 	}
 	if len(books) == 0 && page == 0 {
-		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), b.mainMenu(lang, false))
+		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), nil)
 		return
 	}
 	b.setSession(chatID, &session{mode: kind, query: query, page: page})
@@ -413,7 +432,7 @@ func (b *Bot) searchAuthors(ctx context.Context, chatID, messageID int64, lang, 
 		return
 	}
 	if len(authors) == 0 {
-		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), b.mainMenu(lang, false))
+		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), nil)
 		return
 	}
 	var lines []string
@@ -445,7 +464,7 @@ func (b *Bot) searchSeries(ctx context.Context, chatID, messageID int64, lang, q
 		return
 	}
 	if len(series) == 0 {
-		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), b.mainMenu(lang, false))
+		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), nil)
 		return
 	}
 	var lines []string
@@ -473,7 +492,7 @@ func (b *Bot) showAuthorBooks(ctx context.Context, chatID, messageID int64, cq *
 		return
 	}
 	if len(books) == 0 {
-		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), b.mainMenu(lang, false))
+		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), nil)
 		return
 	}
 	hasMore := len(books) > pageSize
@@ -497,7 +516,7 @@ func (b *Bot) showSeriesBooks(ctx context.Context, chatID, messageID int64, cq *
 		return
 	}
 	if len(books) == 0 {
-		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), b.mainMenu(lang, false))
+		b.reply(ctx, chatID, messageID, edit, b.tr(lang, "noResults"), nil)
 		return
 	}
 	hasMore := len(books) > pageSize
@@ -560,7 +579,7 @@ func (b *Bot) listKeyboard(lang string, books []Book, page int, hasMore bool) *I
 func (b *Bot) sendRandom(ctx context.Context, chatID, userID int64, lang string) {
 	book, err := b.backend.Random(ctx, userID, lang)
 	if err != nil || book == nil {
-		b.sendText(ctx, chatID, b.tr(lang, "noResults"), SendOptions{Inline: b.mainMenu(lang, false)})
+		b.sendText(ctx, chatID, b.tr(lang, "noResults"), SendOptions{})
 		return
 	}
 	b.sendBookData(ctx, chatID, lang, book)
@@ -569,19 +588,16 @@ func (b *Bot) sendRandom(ctx context.Context, chatID, userID int64, lang string)
 func (b *Bot) sendBook(ctx context.Context, chatID, userID int64, lang string, bookID int64) {
 	book, err := b.backend.Book(ctx, userID, bookID, lang)
 	if err != nil || book == nil {
-		b.sendText(ctx, chatID, b.tr(lang, "bookNotFound"), SendOptions{Inline: b.mainMenu(lang, false)})
+		b.sendText(ctx, chatID, b.tr(lang, "bookNotFound"), SendOptions{})
 		return
 	}
 	b.sendBookData(ctx, chatID, lang, book)
 }
 
 func (b *Bot) sendBookData(ctx context.Context, chatID int64, lang string, book *Book) {
+	// The cover and the complete card are one Telegram message. Captions are
+	// limited to 1024 characters, so the annotation is truncated to fit.
 	if cover, mime, err := b.backend.Cover(ctx, book.ID); err == nil && len(cover) > 0 && len(cover) <= maxPhotoBytes {
-		caption := book.Title
-		if book.Authors != "" {
-			caption += " — " + book.Authors
-		}
-		caption = truncateRunes(caption, 1000)
 		ext := "jpg"
 		switch {
 		case strings.Contains(mime, "png"):
@@ -589,72 +605,102 @@ func (b *Bot) sendBookData(ctx context.Context, chatID int64, lang string, book 
 		case strings.Contains(mime, "webp"):
 			ext = "webp"
 		}
-		if err := b.api.SendPhoto(ctx, chatID, cover, fmt.Sprintf("cover-%d.%s", book.ID, ext), caption); err != nil {
+		caption := b.bookCardHTML(lang, book, 1000)
+		if err := b.api.SendPhoto(ctx, chatID, cover, fmt.Sprintf("cover-%d.%s", book.ID, ext), PhotoOptions{
+			Caption: caption, ParseMode: "HTML",
+		}); err == nil {
+			return
+		} else {
 			b.log.Warn("telegram cover", "book", book.ID, "error", err)
 		}
 	}
-	b.sendText(ctx, chatID, b.bookCard(lang, book), SendOptions{Inline: b.bookMenu(lang)})
+	// No usable cover: still one formatted message, with a larger budget.
+	b.sendText(ctx, chatID, b.bookCardHTML(lang, book, 3900), SendOptions{ParseMode: "HTML"})
 }
 
-func (b *Bot) bookCard(lang string, book *Book) string {
-	var sb strings.Builder
-	sb.WriteString(book.Title)
-	sb.WriteString("\n")
+// bookCardHTML renders the card with Telegram HTML formatting. budget is the
+// total character budget: 1024 for a photo caption, 4096 for plain text.
+func (b *Bot) bookCardHTML(lang string, book *Book, budget int) string {
+	parts := make([]string, 0, 14)
+	used := 0
+	add := func(line string) {
+		if line == "" {
+			return
+		}
+		extra := runeLen(line)
+		if len(parts) > 0 {
+			extra++
+		}
+		if used+extra > budget {
+			return
+		}
+		parts = append(parts, line)
+		used += extra
+	}
+	label := func(key, value string) string {
+		return "<b>" + escHTML(b.tr(lang, key)) + ":</b> " + escHTML(value)
+	}
+
+	add("<b>" + escHTML(truncateRunes(book.Title, 180)) + "</b>")
 	if book.Authors != "" {
-		sb.WriteString(b.tr(lang, "authors") + ": " + book.Authors + "\n")
+		add("<i>" + escHTML(truncateRunes(book.Authors, 200)) + "</i>")
 	}
 	if book.Series != "" {
 		series := book.Series
 		if book.SeqNumber > 0 {
 			series += fmt.Sprintf(" #%d", book.SeqNumber)
 		}
-		sb.WriteString(b.tr(lang, "series") + ": " + series + "\n")
+		add(label("series", truncateRunes(series, 140)))
 	}
-	sb.WriteString(fmt.Sprintf("%s: %d\n", b.tr(lang, "bookID"), book.ID))
+	add(label("bookID", strconv.FormatInt(book.ID, 10)))
 	if len(book.Genres) > 0 {
-		sb.WriteString(b.tr(lang, "genres") + ": " + strings.Join(book.Genres, ", ") + "\n")
+		add(label("genres", truncateRunes(strings.Join(book.Genres, ", "), 220)))
 	}
 	if book.Lang != "" {
-		sb.WriteString(b.tr(lang, "language") + ": " + book.Lang + "\n")
+		add(label("language", book.Lang))
 	}
 	if book.Ext != "" {
 		fmtLine := strings.ToUpper(book.Ext)
 		if book.Size > 0 {
 			fmtLine += " · " + formatBytes(book.Size)
 		}
-		sb.WriteString(b.tr(lang, "format") + ": " + fmtLine + "\n")
+		add(label("format", fmtLine))
 	}
 	if book.HasRating {
-		line := b.tr(lang, "rating") + ": " + formatRating(book.Rating, 5, lang)
+		value := formatRating(book.Rating, 5, lang)
 		if book.RatingCount > 0 {
-			line += fmt.Sprintf(" (%s)", b.tr(lang, "ratingCount", book.RatingCount))
+			value += fmt.Sprintf(" (%s)", b.tr(lang, "ratingCount", book.RatingCount))
 		}
-		sb.WriteString(line + "\n")
+		add(label("rating", value))
 	} else {
-		sb.WriteString(b.tr(lang, "rating") + ": " + b.tr(lang, "noRating") + "\n")
+		add(label("rating", b.tr(lang, "noRating")))
+	}
+	switch {
+	case book.IsFinished:
+		add("<b>" + escHTML(b.tr(lang, "finished")) + "</b>")
+	case book.HasProgress:
+		add(fmt.Sprintf(b.tr(lang, "reading"), book.Progress*100))
+	default:
+		add(escHTML(b.tr(lang, "notStarted")))
 	}
 	for _, ext := range book.External {
 		if ext.Rating <= 0 {
 			continue
 		}
-		line := fmt.Sprintf("%s: %s", externalSourceName(ext.Source), formatRating(ext.Rating, ext.RatingMax, lang))
+		value := formatRating(ext.Rating, ext.RatingMax, lang)
 		if ext.Count > 0 {
-			line += fmt.Sprintf(" (%s)", b.tr(lang, "ratingCount", ext.Count))
+			value += fmt.Sprintf(" (%s)", b.tr(lang, "ratingCount", ext.Count))
 		}
-		sb.WriteString(line + "\n")
-	}
-	if book.IsFinished {
-		sb.WriteString(b.tr(lang, "finished") + "\n")
-	} else if book.HasProgress {
-		sb.WriteString(fmt.Sprintf(b.tr(lang, "reading"), book.Progress*100) + "\n")
-	} else {
-		sb.WriteString(b.tr(lang, "notStarted") + "\n")
+		add(label(externalSourceName(ext.Source), value))
 	}
 	if annotation := strings.TrimSpace(plainText(book.Annotation)); annotation != "" {
-		sb.WriteString("\n" + b.tr(lang, "annotation") + ":\n")
-		sb.WriteString(truncateRunes(annotation, 1200))
+		header := "\n<b>" + escHTML(b.tr(lang, "annotation")) + ":</b>\n"
+		remaining := budget - used - runeLen(header) - 2
+		if remaining > 80 {
+			add(header + escHTML(truncateRunes(annotation, remaining)))
+		}
 	}
-	return strings.TrimSpace(sb.String())
+	return strings.Join(parts, "\n")
 }
 
 func (b *Bot) sendID(ctx context.Context, chatID int64, user *User, lang string) {
@@ -670,7 +716,7 @@ func (b *Bot) sendID(ctx context.Context, chatID int64, user *User, lang string)
 		b.tr(lang, "idUserID", user.ID),
 		b.tr(lang, "idTelegram", user.TelegramID),
 	}, "\n")
-	b.sendText(ctx, chatID, text, SendOptions{Inline: b.mainMenu(lang, user.IsAdmin())})
+	b.sendText(ctx, chatID, text, SendOptions{})
 }
 
 func (b *Bot) sendStats(ctx context.Context, chatID int64, lang string) {
@@ -685,7 +731,7 @@ func (b *Bot) sendStats(ctx context.Context, chatID int64, lang string) {
 	}
 	text := fmt.Sprintf(b.tr(lang, "statsText"),
 		stats.Books, stats.Users, stats.Version, formatDuration(stats.Uptime), used, free)
-	b.sendText(ctx, chatID, text, SendOptions{Inline: b.mainMenu(lang, true)})
+	b.sendText(ctx, chatID, text, SendOptions{})
 }
 
 func (b *Bot) sendStatus(ctx context.Context, chatID int64, lang string) {
@@ -720,7 +766,7 @@ func (b *Bot) sendStatus(ctx context.Context, chatID int64, lang string) {
 		status.Conversions.Failed,
 		errText,
 	)
-	b.sendText(ctx, chatID, text, SendOptions{Inline: b.mainMenu(lang, true)})
+	b.sendText(ctx, chatID, text, SendOptions{})
 }
 
 func (b *Bot) sendLanguageMenu(ctx context.Context, chatID int64, lang string) {
@@ -740,55 +786,16 @@ func languageTitle(lang string) string {
 	return "English"
 }
 
-func (b *Bot) mainMenu(lang string, admin bool) *InlineKeyboardMarkup {
-	rows := [][]InlineKeyboardButton{
-		{
-			{Text: b.tr(lang, "btnSearch"), CallbackData: "menu:search"},
-			{Text: b.tr(lang, "btnRecent"), CallbackData: "menu:recent"},
-		},
-		{
-			{Text: b.tr(lang, "btnRandom"), CallbackData: "menu:random"},
-			{Text: b.tr(lang, "btnLanguage"), CallbackData: "menu:lang"},
-		},
-	}
-	if admin {
-		rows = append(rows, []InlineKeyboardButton{
-			{Text: b.tr(lang, "btnStats"), CallbackData: "menu:stats"},
-			{Text: b.tr(lang, "btnStatus"), CallbackData: "menu:status"},
-		})
-	}
-	rows = append(rows, []InlineKeyboardButton{{Text: b.tr(lang, "btnHelp"), CallbackData: "menu:help"}})
-	return &InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
 func (b *Bot) menuRow(lang string) []InlineKeyboardButton {
-	return []InlineKeyboardButton{{Text: "‹ " + b.tr(lang, "menu"), CallbackData: "menu:main"}}
-}
-
-func (b *Bot) bookMenu(lang string) *InlineKeyboardMarkup {
-	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{
-			{Text: b.tr(lang, "btnSearch"), CallbackData: "menu:search"},
-			{Text: b.tr(lang, "menu"), CallbackData: "menu:main"},
-		},
-	}}
-}
-
-func (b *Bot) replyKeyboard(lang string, admin bool) *ReplyKeyboardMarkup {
-	rows := [][]KeyboardButton{
-		{{Text: "/search"}, {Text: "/recent"}},
-		{{Text: "/random"}, {Text: "/language"}},
-	}
-	if admin {
-		rows = append(rows, []KeyboardButton{{Text: "/stats"}, {Text: "/status"}})
-	}
-	rows = append(rows, []KeyboardButton{{Text: "/help"}})
-	return &ReplyKeyboardMarkup{Keyboard: rows, ResizeKeyboard: true, IsPersistent: true}
+	return []InlineKeyboardButton{{Text: "‹ " + b.tr(lang, "home"), CallbackData: "menu:main"}}
 }
 
 func (b *Bot) sendText(ctx context.Context, chatID int64, text string, opts SendOptions) {
 	if strings.TrimSpace(text) == "" {
 		return
+	}
+	if opts.Inline != nil {
+		b.clearMenus(ctx, chatID)
 	}
 	chunks := splitText(text, maxTextRunes)
 	for i, chunk := range chunks {
@@ -796,9 +803,13 @@ func (b *Bot) sendText(ctx context.Context, chatID int64, text string, opts Send
 		if i == len(chunks)-1 {
 			o = opts
 		}
-		if _, err := b.api.SendMessage(ctx, chatID, chunk, o); err != nil {
+		msg, err := b.api.SendMessage(ctx, chatID, chunk, o)
+		if err != nil {
 			b.log.Warn("telegram send", "error", err)
 			return
+		}
+		if i == len(chunks)-1 && opts.Inline != nil {
+			b.trackMenu(chatID, msg.MessageID)
 		}
 	}
 }
@@ -894,6 +905,34 @@ func (b *Bot) getSession(chatID int64) *session {
 		return &copy
 	}
 	return nil
+}
+
+func (b *Bot) trackMenu(chatID, messageID int64) {
+	if messageID <= 0 {
+		return
+	}
+	b.mu.Lock()
+	ids := append(b.menus[chatID], messageID)
+	if len(ids) > 10 {
+		ids = ids[len(ids)-10:]
+	}
+	b.menus[chatID] = ids
+	b.mu.Unlock()
+}
+
+// clearMenus removes previous bot messages that carried inline menus, so a
+// long chat does not turn into a pile of stale keyboards. Telegram allows
+// bots to delete their own messages for 48 hours.
+func (b *Bot) clearMenus(ctx context.Context, chatID int64) {
+	b.mu.Lock()
+	ids := b.menus[chatID]
+	delete(b.menus, chatID)
+	b.mu.Unlock()
+	for _, id := range ids {
+		if err := b.api.DeleteMessage(ctx, chatID, id); err != nil {
+			b.log.Warn("telegram delete menu", "message", id, "error", err)
+		}
+	}
 }
 
 func (b *Bot) allowUpload(userID int64, limit int) (bool, time.Duration) {
@@ -1016,7 +1055,7 @@ func (b *Bot) sendUploadResult(ctx context.Context, chatID int64, lang string, r
 		}
 		text = b.tr(lang, "uploadError", msg)
 	}
-	b.sendText(ctx, chatID, text, SendOptions{Inline: b.mainMenu(lang, true)})
+	b.sendText(ctx, chatID, text, SendOptions{})
 }
 
 func validBookContent(path, ext string) bool {

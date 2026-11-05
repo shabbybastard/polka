@@ -18,3 +18,18 @@
 .pdf-reader__page canvas {
   display: block;
 }
+
+.pdf-reader__theme {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--reader-rule);
+  background: var(--reader-chrome);
+  color: var(--reader-fg);
+  cursor: pointer;
+}
+
+.reader--night .pdf-reader__page {
+  box-shadow: 0 4px 22px rgba(0, 0, 0, 0.55);
+}

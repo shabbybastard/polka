@@ -24,10 +24,11 @@
 }
 
 .reader--night {
+  color-scheme: dark;
   --reader-bg: #121212;
-  --reader-fg: #d9d6d0;
-  --reader-muted: #8c8a85;
-  --reader-rule: #2c2c2c;
+  --reader-fg: #e8e8e8;
+  --reader-muted: #a8a8a8;
+  --reader-rule: #333333;
   --reader-chrome: #121212;
 }
 

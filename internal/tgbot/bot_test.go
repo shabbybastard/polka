@@ -18,13 +18,18 @@ type sentMessage struct {
 }
 
 type fakeAPI struct {
-	mu       sync.Mutex
-	sent     []sentMessage
-	edits    []sentMessage
-	photos   int
-	answers  []string
-	updates  []Update
-	fileData []byte
+	mu          sync.Mutex
+	sent        []sentMessage
+	edits       []sentMessage
+	photos      int
+	photoText   string
+	photoMode   string
+	answers     []string
+	updates     []Update
+	fileData    []byte
+	commands    map[string][]BotCommand
+	menuButtons int
+	deleted     []int64
 }
 
 func (f *fakeAPI) GetUpdates(ctx context.Context, _ int64, _ int) ([]Update, error) {
@@ -54,9 +59,35 @@ func (f *fakeAPI) EditMessageText(_ context.Context, chatID, _ int64, text strin
 	return nil
 }
 
-func (f *fakeAPI) SendPhoto(context.Context, int64, []byte, string, string) error {
+func (f *fakeAPI) DeleteMessage(_ context.Context, _ int64, messageID int64) error {
+	f.mu.Lock()
+	f.deleted = append(f.deleted, messageID)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeAPI) SendPhoto(_ context.Context, _ int64, _ []byte, _ string, opts PhotoOptions) error {
 	f.mu.Lock()
 	f.photos++
+	f.photoText = opts.Caption
+	f.photoMode = opts.ParseMode
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeAPI) SetMyCommands(_ context.Context, commands []BotCommand, languageCode string) error {
+	f.mu.Lock()
+	if f.commands == nil {
+		f.commands = map[string][]BotCommand{}
+	}
+	f.commands[languageCode] = commands
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeAPI) SetChatMenuButton(context.Context) error {
+	f.mu.Lock()
+	f.menuButtons++
 	f.mu.Unlock()
 	return nil
 }
@@ -113,6 +144,8 @@ type fakeBackend struct {
 	uploadLimit int
 	uploadCalls int
 	uploadRes   *UploadResult
+	cover       []byte
+	coverMime   string
 }
 
 func newFakeBackend() *fakeBackend {
@@ -197,7 +230,10 @@ func (f *fakeBackend) Book(_ context.Context, _ int64, id int64, _ string) (*Boo
 }
 
 func (f *fakeBackend) Cover(context.Context, int64) ([]byte, string, error) {
-	return nil, "", errors.New("no cover")
+	if len(f.cover) == 0 {
+		return nil, "", errors.New("no cover")
+	}
+	return f.cover, f.coverMime, nil
 }
 
 func (f *fakeBackend) Recent(_ context.Context, limit, offset int) ([]Book, error) {
@@ -248,17 +284,42 @@ func msg(chatID int64, from int64, text string) *Message {
 	}
 }
 
-func TestStartShowsReplyAndInlineMenus(t *testing.T) {
+func TestStartUsesSideMenu(t *testing.T) {
 	bot, api, _, _ := testBot(t)
 	bot.handleUpdate(context.Background(), Update{Message: msg(100, 555, "/start")})
-	if len(api.sent) != 2 {
-		t.Fatalf("start messages = %d, want 2", len(api.sent))
+	if len(api.sent) != 1 {
+		t.Fatalf("start messages = %d, want 1", len(api.sent))
 	}
-	if api.sent[0].opts.Reply == nil || api.sent[1].opts.Inline == nil {
-		t.Fatalf("keyboards: %+v / %+v", api.sent[0].opts, api.sent[1].opts)
+	if api.sent[0].opts.Inline != nil || api.sent[0].opts.Reply != nil {
+		t.Fatalf("start must not attach an inline/reply menu: %+v", api.sent[0].opts)
 	}
-	if !api.sent[0].opts.Reply.IsPersistent {
-		t.Error("reply keyboard must be persistent")
+	if !api.sent[0].opts.RemoveKeyboard {
+		t.Error("start must remove the old reply keyboard")
+	}
+
+	bot.configureMenu(context.Background())
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.menuButtons != 1 {
+		t.Errorf("chat menu button calls = %d", api.menuButtons)
+	}
+	if len(api.commands[""]) == 0 || api.commands[""][0].Command != "start" {
+		t.Errorf("default commands = %+v", api.commands[""])
+	}
+	if len(api.commands["en"]) == 0 || api.commands["en"][0].Command != "start" {
+		t.Errorf("english commands = %+v", api.commands["en"])
+	}
+}
+
+func TestPreviousMenuMessagesAreDeleted(t *testing.T) {
+	bot, api, _, _ := testBot(t)
+	bot.handleUpdate(context.Background(), Update{Message: msg(100, 555, "/language")})
+	bot.handleUpdate(context.Background(), Update{Message: msg(100, 555, "/language")})
+	api.mu.Lock()
+	deleted := append([]int64(nil), api.deleted...)
+	api.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != 1 {
+		t.Fatalf("deleted menu messages = %v, want [1]", deleted)
 	}
 }
 
@@ -336,6 +397,44 @@ func TestSearchPaginationAndBookCard(t *testing.T) {
 		if !strings.Contains(card, want) {
 			t.Errorf("card missing %q:\n%s", want, card)
 		}
+	}
+}
+
+func TestBookCardIsOneFormattedMessage(t *testing.T) {
+	bot, api, backend, _ := testBot(t)
+	backend.langs[7] = "ru"
+	book := &Book{
+		ID: 1, Title: "Книга <1>", Authors: "Толстой Лев", Series: "Серия", SeqNumber: 2,
+		Year: 2020, Genres: []string{"Проза", "Классика"}, Lang: "ru", Ext: "epub", Size: 4096,
+		HasRating: true, Rating: 4.25, RatingCount: 8, HasProgress: true, Progress: 0.5,
+		Annotation: strings.Repeat("Очень длинная аннотация. ", 200),
+	}
+	backend.books[1] = book
+	backend.cover = []byte("cover")
+	backend.coverMime = "image/png"
+
+	bot.sendBookData(context.Background(), 100, "ru", book)
+	if api.photos != 1 || len(api.sent) != 0 {
+		t.Fatalf("want one photo message, photos=%d sent=%d", api.photos, len(api.sent))
+	}
+	if api.photoMode != "HTML" || !strings.Contains(api.photoText, "<b>Книга &lt;1&gt;</b>") {
+		t.Fatalf("caption = %q mode=%q", api.photoText, api.photoMode)
+	}
+	if !strings.Contains(api.photoText, "4,25/5") || !strings.Contains(api.photoText, "Прочитано: 50%") {
+		t.Errorf("caption lost card fields: %q", api.photoText)
+	}
+	if runeLen(api.photoText) > 1024 {
+		t.Errorf("caption is %d chars, Telegram allows 1024", runeLen(api.photoText))
+	}
+
+	// Without a cover the whole card is still one formatted text message.
+	backend.cover = nil
+	bot.sendBookData(context.Background(), 100, "ru", book)
+	if len(api.sent) != 1 || api.sent[0].opts.ParseMode != "HTML" {
+		t.Fatalf("text card = %+v", api.sent)
+	}
+	if runeLen(api.sent[0].text) > maxTextRunes {
+		t.Errorf("text card is too long: %d", runeLen(api.sent[0].text))
 	}
 }
 

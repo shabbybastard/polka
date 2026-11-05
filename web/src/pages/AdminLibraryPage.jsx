@@ -40,6 +40,10 @@ const PHASE_LABELS = () => ({
 // UI: the backend and its settings stay intact, so the block below can be
 // restored by flipping this flag instead of reverting code.
 const SHOW_COLLECTION_SOURCES = false;
+const CONVERSION_DISMISSED_KEY = "polka-conversion-dismissed";
+
+const conversionSignature = (jobs) =>
+  jobs?.length ? `${jobs[0].id}:${jobs[0].updatedAt ?? ""}` : "";
 
 const AdminLibraryPage = ({ onConfigChange }) => {
   // --- Book upload ---
@@ -48,6 +52,13 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const [convert, setConvert] = useState({ fb2ToEpub: false, keepSource: true });
   const [telegram, setTelegram] = useState({ uploadRateLimit: 50 });
   const [conversionJobs, setConversionJobs] = useState([]);
+  const [conversionHidden, setConversionHidden] = useState(() => {
+    try {
+      return Boolean(localStorage.getItem(CONVERSION_DISMISSED_KEY));
+    } catch {
+      return false;
+    }
+  });
   const conversionPolling = useRef(null);
   const conversionDone = useRef(new Set());
   const fileInput = useRef(null);
@@ -73,6 +84,24 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         }
         if (newlyDone) onConfigChange?.();
         const active = jobs.some((job) => job.status === "queued" || job.status === "processing");
+        let dismissed = "";
+        try {
+          dismissed = localStorage.getItem(CONVERSION_DISMISSED_KEY) ?? "";
+        } catch {
+          /* ignore */
+        }
+        if (active) {
+          setConversionHidden(false);
+          try {
+            localStorage.removeItem(CONVERSION_DISMISSED_KEY);
+          } catch {
+            /* ignore */
+          }
+        } else if (dismissed && dismissed === conversionSignature(jobs)) {
+          setConversionHidden(true);
+        } else {
+          setConversionHidden(false);
+        }
         if (active && !conversionPolling.current) {
           conversionPolling.current = setInterval(refreshConversions, 1500);
         } else if (!active && conversionPolling.current) {
@@ -128,12 +157,14 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const [inpxPath, setInpxPath] = useState("");
   const [replace, setReplace] = useState(false);
   const [status, setStatus] = useState(null);
+  const [importStatusHidden, setImportStatusHidden] = useState(false);
   const polling = useRef(null);
 
   const refreshStatus = () =>
     importStatus()
       .then((st) => {
         setStatus(st);
+        if (st.running) setImportStatusHidden(false);
         if (!st.running && polling.current) {
           clearInterval(polling.current);
           polling.current = null;
@@ -149,6 +180,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const startImport = () => {
     if (!inpxFile && !inpxPath.trim()) return;
     if (replace && !confirm(t("admin.import.confirm"))) return;
+    setImportStatusHidden(false);
     importInpx({ file: inpxFile, path: inpxPath.trim(), replace })
       .then(() => {
         setInpxFile(null);
@@ -478,6 +510,26 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       ? Math.min(100, Math.round((Number(ratingStatus.processed) / Number(ratingStatus.total)) * 100))
       : 0;
 
+  const conversionQueued = conversionJobs.filter((job) => job.status === "queued").length;
+  const conversionProcessing = conversionJobs.filter((job) => job.status === "processing").length;
+  const conversionActive = conversionQueued + conversionProcessing > 0;
+  const conversionFinished = conversionJobs.length - conversionQueued - conversionProcessing;
+  const conversionPercent =
+    conversionJobs.length > 0
+      ? Math.min(100, Math.round((conversionFinished / conversionJobs.length) * 100))
+      : 0;
+
+  const dismissConversions = () => {
+    setConversionHidden(true);
+    const signature = conversionSignature(conversionJobs);
+    if (!signature) return;
+    try {
+      localStorage.setItem(CONVERSION_DISMISSED_KEY, signature);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="container library-admin">
       <header className="library-admin__header">
@@ -601,9 +653,31 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </ul>
         )}
 
-        {conversionJobs.length > 0 && (
-          <>
-            <h3 className="library-admin__subhead">{t("admin.convert.jobs")}</h3>
+        {!conversionHidden && conversionJobs.length > 0 && (
+          <div className="library-admin__genre-status library-admin__conversion-card">
+            <div className="library-admin__genre-status-head">
+              <span className="library-admin__genre-mode">{t("admin.convert.jobs")}</span>
+              <span className="library-admin__genre-progress">
+                {conversionActive
+                  ? t("admin.convert.queueActive", {
+                      queued: conversionQueued,
+                      processing: conversionProcessing,
+                    })
+                  : t("admin.convert.queueDone", {
+                      done: conversionFinished,
+                      total: conversionJobs.length,
+                    })}
+              </span>
+            </div>
+            <div
+              className="library-admin__genre-bar"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax={conversionJobs.length || 0}
+              aria-valuenow={conversionFinished}
+            >
+              <span style={{ width: `${conversionPercent}%` }} />
+            </div>
             <ul className="library-admin__results library-admin__conversions">
               {conversionJobs.map((job) => (
                 <li key={job.id} className={`is-${job.status}`}>
@@ -622,7 +696,18 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                 </li>
               ))}
             </ul>
-          </>
+            {!conversionActive && (
+              <div className="library-admin__status-close">
+                <button
+                  type="button"
+                  className="btn btn-link"
+                  onClick={dismissConversions}
+                >
+                  {t("admin.progress.close")}
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </section>
 
@@ -770,35 +855,68 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           <p className="library-admin__hint">{t("admin.import.pathHint")}</p>
         </div>
 
-        {status && (status.running || status.phase === "done" || status.phase === "error") && (
-          <div className={`library-admin__status library-admin__status--${status.phase}`}>
-            {status.running && (
-              <>
-                <span className="library-admin__spinner" aria-hidden="true" />
-                {PHASE_LABELS()[status.phase] ?? status.phase}
-                {status.phase === "loading" && status.processed > 0 && (
-                  <>{t("admin.import.processed", { n: status.processed.toLocaleString() })}</>
-                )}
-              </>
-            )}
-            {!status.running && status.phase === "done" && (
-              <>
-                {t("admin.import.done", {
-                  books: Number(status.books).toLocaleString(),
-                  authors: Number(status.authors).toLocaleString(),
-                  series: Number(status.series).toLocaleString(),
-                })}
-              </>
-            )}
-            {!status.running && status.phase === "error" && <>{t("admin.import.error", { err: status.error })}</>}
-          </div>
-        )}
-
-        {status && !status.running && status.warning && (
-          <div className="library-admin__status library-admin__status--warning">
-            ⚠ {status.warning}
-          </div>
-        )}
+        {!importStatusHidden &&
+          status &&
+          (status.running || status.phase === "done" || status.phase === "error") && (
+            <div className="library-admin__genre-status library-admin__import-status">
+              <div className="library-admin__genre-status-head">
+                <span className="library-admin__genre-mode">{t("admin.import.statusTitle")}</span>
+                <span
+                  className={`library-admin__genre-progress ${
+                    status.phase === "error"
+                      ? "is-error"
+                      : status.phase === "done" && !status.running
+                        ? "is-done"
+                        : ""
+                  }`}
+                >
+                  {status.running && (
+                    <>
+                      <span className="library-admin__spinner" aria-hidden="true" />
+                      {PHASE_LABELS()[status.phase] ?? status.phase}
+                      {status.phase === "loading" && status.processed > 0 && (
+                        <>{t("admin.import.processed", { n: status.processed.toLocaleString() })}</>
+                      )}
+                    </>
+                  )}
+                  {!status.running && status.phase === "done" && (
+                    <>
+                      {t("admin.import.done", {
+                        books: Number(status.books).toLocaleString(),
+                        authors: Number(status.authors).toLocaleString(),
+                        series: Number(status.series).toLocaleString(),
+                      })}
+                    </>
+                  )}
+                  {!status.running && status.phase === "error" && (
+                    <>{t("admin.import.error", { err: status.error })}</>
+                  )}
+                </span>
+              </div>
+              <div className="library-admin__genre-bar">
+                <span
+                  className={
+                    status.running ? "is-running" : status.phase === "error" ? "is-error" : ""
+                  }
+                  style={{ width: "100%" }}
+                />
+              </div>
+              {status.warning && (
+                <div className="library-admin__status-note">⚠ {status.warning}</div>
+              )}
+              {!status.running && (
+                <div className="library-admin__status-close">
+                  <button
+                    type="button"
+                    className="btn btn-link"
+                    onClick={() => setImportStatusHidden(true)}
+                  >
+                    {t("admin.progress.close")}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
       </section>
 
       <section className="library-admin__section">

@@ -26,6 +26,14 @@ func plainText(s string) string {
 	return s
 }
 
+func escHTML(s string) string {
+	return html.EscapeString(s)
+}
+
+func runeLen(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
 func truncateRunes(s string, max int) string {
 	if max <= 0 {
 		return ""

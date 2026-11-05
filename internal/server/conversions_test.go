@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/shabbybastard/polka/internal/conversions"
 	"github.com/shabbybastard/polka/internal/fb2epub"
+	"github.com/shabbybastard/polka/internal/library"
 )
 
 // conversionUpload uploads one file and decodes the 202/200 response.
@@ -108,6 +110,56 @@ func TestFB2ConversionQueue(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "fb2-sources", jobID+".fb2")); err != nil {
 		t.Errorf("source was not archived: %v", err)
+	}
+}
+
+const conversionAuthorFB2 = `<?xml version="1.0" encoding="UTF-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<description><title-info>
+  <book-title>Отцы и дети</book-title>
+  <author><first-name>Иван</first-name><middle-name>Сергеевич</middle-name><last-name>Тургенев</last-name></author>
+  <lang>ru</lang>
+</title-info></description>
+<body><section><p>Текст.</p></section></body>
+</FictionBook>`
+
+// The catalog stores a person structurally as last/first/middle and displays
+// "Фамилия Имя"; the converted EPUB uses the human order "Имя Отчество
+// Фамилия". This guards the conversion against swapping those fields.
+func TestFB2ConversionKeepsAuthorOrder(t *testing.T) {
+	ts, client, st, dir := newManageServerDir(t)
+	conversionSetting(t, ts.URL, client, "fb2ToEpub", true)
+
+	status, result, jobID := conversionUpload(t, ts.URL, client, "turgeniev.fb2", []byte(conversionAuthorFB2))
+	if status != 202 || result.Status != "queued" || jobID == "" {
+		t.Fatalf("upload = %d %+v job=%q", status, result, jobID)
+	}
+	job := waitConversion(t, ts.URL, client, jobID, string(conversions.StatusDone))
+	details, err := st.BookDetails(t.Context(), job.BookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Authors) != 1 {
+		t.Fatalf("authors = %+v", details.Authors)
+	}
+	a := details.Authors[0]
+	if a.Last != "Тургенев" || a.First != "Иван" || a.Middle != "Сергеевич" {
+		t.Fatalf("stored author = %+v, want Тургенев/Иван/Сергеевич", a)
+	}
+	if details.AuthorNames != "Тургенев Иван" {
+		t.Errorf("display name = %q, want %q", details.AuthorNames, "Тургенев Иван")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "lib", "converted", details.File+".epub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	epub, err := library.ParseEPUB(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(epub.Authors) != 1 || epub.Authors[0] != "Иван Сергеевич Тургенев" {
+		t.Errorf("EPUB creators = %v, want [Иван Сергеевич Тургенев]", epub.Authors)
 	}
 }
 

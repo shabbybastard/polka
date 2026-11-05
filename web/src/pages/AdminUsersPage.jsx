@@ -277,7 +277,7 @@ const AdminUsersPage = ({ me }) => {
           <input
             type="text"
             inputMode="numeric"
-            placeholder={t("users.telegramIdPh")}
+            placeholder={t("users.telegramIdOptional")}
             value={form.telegramId}
             onChange={(e) => setForm({ ...form, telegramId: e.target.value })}
           />

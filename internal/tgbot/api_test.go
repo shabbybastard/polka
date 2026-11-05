@@ -45,11 +45,36 @@ func TestAPIClientCalls(t *testing.T) {
 	}
 
 	kb := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "go", CallbackData: "x"}}}}
-	if _, err := c.SendMessage(context.Background(), 7, "hello", SendOptions{Inline: kb}); err != nil {
+	if _, err := c.SendMessage(context.Background(), 7, "<b>hello</b>", SendOptions{Inline: kb, ParseMode: "HTML"}); err != nil {
 		t.Fatal(err)
 	}
-	if gotMethod != "sendMessage" || gotPayload["text"] != "hello" || gotPayload["reply_markup"] == nil {
+	if gotMethod != "sendMessage" || gotPayload["text"] != "<b>hello</b>" || gotPayload["reply_markup"] == nil || gotPayload["parse_mode"] != "HTML" {
 		t.Errorf("send payload: %s %+v", gotMethod, gotPayload)
+	}
+	if _, err := c.SendMessage(context.Background(), 7, "plain", SendOptions{RemoveKeyboard: true}); err != nil {
+		t.Fatal(err)
+	}
+	markup, _ := gotPayload["reply_markup"].(map[string]any)
+	if markup == nil || markup["remove_keyboard"] != true {
+		t.Errorf("remove keyboard payload: %+v", gotPayload)
+	}
+	if err := c.SetMyCommands(context.Background(), []BotCommand{{Command: "start", Description: "Start"}}, "en"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "setMyCommands" || gotPayload["language_code"] != "en" || gotPayload["commands"] == nil {
+		t.Errorf("commands payload: %s %+v", gotMethod, gotPayload)
+	}
+	if err := c.SetChatMenuButton(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "setChatMenuButton" || gotPayload["menu_button"] == nil {
+		t.Errorf("menu button payload: %s %+v", gotMethod, gotPayload)
+	}
+	if err := c.DeleteMessage(context.Background(), 7, 42); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "deleteMessage" || gotPayload["message_id"] != float64(42) {
+		t.Errorf("delete payload: %s %+v", gotMethod, gotPayload)
 	}
 
 	f, err := c.GetFile(context.Background(), "f")

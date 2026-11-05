@@ -3,11 +3,29 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { fetchProgress, localProgress, saveProgress } from "../api/reader";
+import {
+  fetchProgress,
+  fetchReaderPrefs,
+  localProgress,
+  saveProgress,
+  saveReaderPrefs,
+} from "../api/reader";
 import "./ReaderPage.css";
 import "./PdfReader.css";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+const READER_THEMES = ["paper", "sepia", "night"];
+
+const loadTheme = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem("polka-reader-prefs"));
+    if (READER_THEMES.includes(stored?.theme)) return stored.theme;
+  } catch {
+    /* ignore */
+  }
+  return "paper";
+};
 
 // PDF reader: a continuous strip of pages rendered while scrolling,
 // progress = page number.
@@ -17,12 +35,39 @@ const PdfReader = ({ bookId, meta }) => {
   const [pageSize, setPageSize] = useState(null); // approximate dimensions for placeholders
   const [current, setCurrent] = useState(1);
   const [error, setError] = useState(null);
+  const [theme, setTheme] = useState(loadTheme);
+  const prefsSynced = useRef(false);
 
   const containerRef = useRef(null);
   const rendered = useRef(new Set());
   const serverStored = useRef(false);
   const restoreTo = useRef(1);
   const saveTimer = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchReaderPrefs()
+      .then((server) => {
+        prefsSynced.current = true;
+        if (!cancelled && READER_THEMES.includes(server?.theme)) setTheme(server.theme);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateTheme = (next) => {
+    if (!READER_THEMES.includes(next)) return;
+    setTheme(next);
+    try {
+      const stored = JSON.parse(localStorage.getItem("polka-reader-prefs")) || {};
+      localStorage.setItem("polka-reader-prefs", JSON.stringify({ ...stored, theme: next }));
+    } catch {
+      /* ignore */
+    }
+    if (prefsSynced.current) saveReaderPrefs({ theme: next }).catch(() => {});
+  };
 
   // Load the document and the saved position
   useEffect(() => {
@@ -128,7 +173,7 @@ const PdfReader = ({ bookId, meta }) => {
 
   if (error) {
     return (
-      <div className="reader reader--paper">
+      <div className={`reader reader--${theme}`}>
         <div className="reader__error">
           <p>{t("reader.pdfFail")}</p>
           <Link to={`/book/${bookId}`} className="btn btn-ghost">{t("reader.back")}</Link>
@@ -141,13 +186,26 @@ const PdfReader = ({ bookId, meta }) => {
   const overall = numPages > 0 ? current / numPages : 0;
 
   return (
-    <div className="reader reader--paper pdf-reader">
+    <div className={`reader reader--${theme} pdf-reader`}>
       <header className="reader__bar">
         <Link to={`/book/${bookId}`} className="reader__bar-btn" title={t("reader.toBook")}>←</Link>
         <div className="reader__bar-title">
           <span className="reader__bar-book">{meta.title}</span>
           {meta.authors && <span className="reader__bar-author">{meta.authors}</span>}
         </div>
+        <select
+          className="pdf-reader__theme"
+          aria-label={t("reader.theme")}
+          title={t("reader.theme")}
+          value={theme}
+          onChange={(e) => updateTheme(e.target.value)}
+        >
+          {READER_THEMES.map((id) => (
+            <option key={id} value={id}>
+              {t(`reader.theme.${id}`)}
+            </option>
+          ))}
+        </select>
         <a className="reader__bar-btn" href={meta.fileUrl} title={t("reader.openExternal")} target="_blank" rel="noreferrer">⤓</a>
       </header>
 

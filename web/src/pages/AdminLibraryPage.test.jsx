@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { t } from "../i18n";
@@ -49,7 +49,56 @@ const settings = {
   library: { configured: true, exists: true, entries: 1, dir: "/books" },
 };
 
+const mockBase = () => {
+  fetchSettings.mockResolvedValue(settings);
+  importStatus.mockResolvedValue({ running: false });
+  genreSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
+  ratingSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
+  fetchCollections.mockResolvedValue({ collections: [] });
+};
+
 describe("AdminLibraryPage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it("keeps a dismissed completed conversion queue hidden after reload", async () => {
+    mockBase();
+    const job = { id: "job-1", name: "book.fb2", status: "done", updatedAt: "2026-01-01 10:00:00" };
+    fetchConversions.mockResolvedValue({ jobs: [job] });
+
+    const view = render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(t("admin.convert.jobs"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: t("admin.progress.close") }));
+    await waitFor(() => expect(screen.queryByText(t("admin.convert.jobs"))).not.toBeInTheDocument());
+    view.unmount();
+
+    // Same completed job after a reload: the card stays dismissed.
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(fetchConversions).toHaveBeenCalled());
+    expect(screen.queryByText(t("admin.convert.jobs"))).not.toBeInTheDocument();
+
+    // A new conversion job is a new signature and brings the card back.
+    fetchConversions.mockResolvedValue({
+      jobs: [{ ...job, id: "job-2", updatedAt: "2026-01-01 11:00:00" }],
+    });
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(t("admin.convert.jobs"))).toBeInTheDocument();
+  });
+
   it("refreshes the shared config after hiding the home hero", async () => {
     fetchSettings.mockResolvedValue(settings);
     fetchConversions.mockResolvedValue({ jobs: [] });

@@ -86,8 +86,20 @@ type ReplyKeyboardMarkup struct {
 }
 
 type SendOptions struct {
-	Inline *InlineKeyboardMarkup
-	Reply  *ReplyKeyboardMarkup
+	Inline         *InlineKeyboardMarkup
+	Reply          *ReplyKeyboardMarkup
+	RemoveKeyboard bool
+	ParseMode      string
+}
+
+type PhotoOptions struct {
+	Caption   string
+	ParseMode string
+}
+
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 // API is the subset of the Telegram Bot API used by the bot and handy for
@@ -96,10 +108,13 @@ type API interface {
 	GetUpdates(ctx context.Context, offset int64, timeout int) ([]Update, error)
 	SendMessage(ctx context.Context, chatID int64, text string, opts SendOptions) (Message, error)
 	EditMessageText(ctx context.Context, chatID, messageID int64, text string, kb *InlineKeyboardMarkup) error
-	SendPhoto(ctx context.Context, chatID int64, data []byte, filename, caption string) error
+	DeleteMessage(ctx context.Context, chatID, messageID int64) error
+	SendPhoto(ctx context.Context, chatID int64, data []byte, filename string, opts PhotoOptions) error
 	AnswerCallbackQuery(ctx context.Context, id, text string, alert bool) error
 	GetFile(ctx context.Context, fileID string) (*File, error)
 	DownloadFile(ctx context.Context, filePath string, dst io.Writer, limit int64) (int64, error)
+	SetMyCommands(ctx context.Context, commands []BotCommand, languageCode string) error
+	SetChatMenuButton(ctx context.Context) error
 }
 
 // ErrFileTooLarge is returned by DownloadFile when Telegram's declared or
@@ -192,6 +207,11 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, opt
 		payload["reply_markup"] = opts.Inline
 	} else if opts.Reply != nil {
 		payload["reply_markup"] = opts.Reply
+	} else if opts.RemoveKeyboard {
+		payload["reply_markup"] = map[string]bool{"remove_keyboard": true}
+	}
+	if opts.ParseMode != "" {
+		payload["parse_mode"] = opts.ParseMode
 	}
 	raw, err := c.call(ctx, "sendMessage", payload)
 	if err != nil {
@@ -218,6 +238,13 @@ func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, t
 	return err
 }
 
+func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	_, err := c.call(ctx, "deleteMessage", map[string]any{
+		"chat_id": chatID, "message_id": messageID,
+	})
+	return err
+}
+
 func (c *Client) AnswerCallbackQuery(ctx context.Context, id, text string, alert bool) error {
 	payload := map[string]any{"callback_query_id": id, "show_alert": alert}
 	if text != "" {
@@ -239,14 +266,19 @@ func (c *Client) GetFile(ctx context.Context, fileID string) (*File, error) {
 	return &f, nil
 }
 
-func (c *Client) SendPhoto(ctx context.Context, chatID int64, data []byte, filename, caption string) error {
+func (c *Client) SendPhoto(ctx context.Context, chatID int64, data []byte, filename string, opts PhotoOptions) error {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	if err := mw.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
 		return err
 	}
-	if caption != "" {
-		if err := mw.WriteField("caption", caption); err != nil {
+	if opts.Caption != "" {
+		if err := mw.WriteField("caption", opts.Caption); err != nil {
+			return err
+		}
+	}
+	if opts.ParseMode != "" {
+		if err := mw.WriteField("parse_mode", opts.ParseMode); err != nil {
 			return err
 		}
 	}
@@ -278,6 +310,22 @@ func (c *Client) SendPhoto(ctx context.Context, chatID int64, data []byte, filen
 		return &APIError{Code: out.ErrorCode, Description: out.Description}
 	}
 	return nil
+}
+
+func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand, languageCode string) error {
+	payload := map[string]any{"commands": commands}
+	if languageCode != "" {
+		payload["language_code"] = languageCode
+	}
+	_, err := c.call(ctx, "setMyCommands", payload)
+	return err
+}
+
+func (c *Client) SetChatMenuButton(ctx context.Context) error {
+	_, err := c.call(ctx, "setChatMenuButton", map[string]any{
+		"menu_button": map[string]string{"type": "commands"},
+	})
+	return err
 }
 
 func (c *Client) DownloadFile(ctx context.Context, filePath string, dst io.Writer, limit int64) (int64, error) {
