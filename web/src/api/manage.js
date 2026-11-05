@@ -71,6 +71,7 @@ export const importInpx = ({ file, path, replace } = {}) => {
 };
 
 export const importStatus = () => api.getJson("admin/import/status");
+export const fetchConversions = () => api.getJson("admin/conversions");
 
 export const exportUrl = (ids) => api.buildUrl(`Images/export?ids=${ids.join(",")}`);
 

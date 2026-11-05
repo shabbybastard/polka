@@ -83,6 +83,59 @@
   font-size: 13px;
 }
 
+.library-admin__convert {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 14px;
+}
+
+.library-admin__convert .library-admin__source {
+  flex-wrap: wrap;
+  padding: 6px 10px;
+}
+
+.library-admin__subhead {
+  margin: 24px 0 4px;
+  font-size: 16px;
+}
+
+.library-admin__conversion-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.05));
+  color: var(--fg-muted, #777);
+}
+
+.library-admin__conversion-status.is-processing {
+  background: var(--accent-soft, #fff3c4);
+  color: var(--fg, #1a1714);
+}
+
+.library-admin__conversion-status.is-done {
+  background: rgba(46, 157, 110, 0.14);
+  color: var(--success, #2e9d6e);
+}
+
+.library-admin__conversion-status.is-failed {
+  background: rgba(216, 80, 58, 0.12);
+  color: var(--danger, #b3261e);
+}
+
+.library-admin__conversion-status.is-skipped {
+  background: var(--bg-muted, rgba(0, 0, 0, 0.05));
+  color: #9a6700;
+}
+
+.library-admin__conversion-link {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--fg-muted, #777);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .library-admin__import-row {
   display: flex;
   gap: 16px;

@@ -5,6 +5,7 @@ import { t } from "../i18n";
 import AdminLibraryPage from "./AdminLibraryPage";
 
 vi.mock("../api/manage", () => ({
+  fetchConversions: vi.fn(),
   fetchSettings: vi.fn(),
   genreSyncStatus: vi.fn(),
   importInpx: vi.fn(),
@@ -23,7 +24,7 @@ vi.mock("../api/collections", () => ({
   syncCollectionSource: vi.fn(),
 }));
 
-import { fetchSettings, genreSyncStatus, importStatus, saveSettings } from "../api/manage";
+import { fetchConversions, fetchSettings, genreSyncStatus, importStatus, saveSettings } from "../api/manage";
 import { fetchCollections } from "../api/collections";
 
 const settings = {
@@ -34,6 +35,7 @@ const settings = {
   tagSources: { livelib: false, open_library: false },
   opdsEnabled: true,
   smtp: { enabled: false, security: "starttls", port: 587 },
+  convert: { fb2ToEpub: false, keepSource: true },
   collectionSources: [],
   library: { configured: true, exists: true, entries: 1, dir: "/books" },
 };
@@ -41,6 +43,7 @@ const settings = {
 describe("AdminLibraryPage", () => {
   it("refreshes the shared config after hiding the home hero", async () => {
     fetchSettings.mockResolvedValue(settings);
+    fetchConversions.mockResolvedValue({ jobs: [] });
     importStatus.mockResolvedValue({ running: false });
     genreSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
     fetchCollections.mockResolvedValue({ collections: [] });

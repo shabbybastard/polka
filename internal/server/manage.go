@@ -32,7 +32,7 @@ const (
 )
 
 var supportedUploadExt = map[string]bool{
-	"fb2": true, "epub": true, "pdf": true, "djvu": true, "txt": true, "mobi": true, "azw3": true,
+	"fb2": true, "epub": true, "pdf": true, "txt": true, "mobi": true, "azw3": true,
 }
 
 // --- Book upload ---
@@ -52,6 +52,8 @@ type uploadResult struct {
 	Error       string         `json:"error,omitempty"`
 	Duplicate   *duplicateInfo `json:"duplicate,omitempty"`
 	NeedConfirm bool           `json:"needConfirm,omitempty"` // metadata match: can be uploaded with force=1
+	Status      string         `json:"status,omitempty"`      // "queued" for FB2 -> EPUB jobs
+	JobID       string         `json:"jobId,omitempty"`
 }
 
 func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +71,19 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	supported := false
+	for _, fh := range files {
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(fh.Filename), "."))
+		if supportedUploadExt[ext] {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		http.Error(w, "unsupported file format", http.StatusBadRequest)
+		return
+	}
+
 	uploadDir := filepath.Join(s.cfg.LibraryDir, uploadsFolder)
 	if err := os.MkdirAll(uploadDir, uploadFolderPerms); err != nil {
 		s.apiError(w, err)
@@ -78,11 +93,24 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 	force := r.FormValue("force") == "1"
 	lang := reqLang(r)
 	results := make([]uploadResult, 0, len(files))
+	var queuedIDs []string
 	for _, fh := range files {
 		res := s.saveUploadedBook(r.Context(), uploadDir, fh, force, lang)
+		if res.JobID != "" {
+			queuedIDs = append(queuedIDs, res.JobID)
+		}
 		results = append(results, res)
 	}
-	writeJSON(w, map[string]any{"results": results})
+	response := map[string]any{"results": results}
+	if len(queuedIDs) > 0 {
+		response["status"] = "queued"
+		if len(queuedIDs) == 1 {
+			response["jobId"] = queuedIDs[0]
+		}
+		writeJSONStatus(w, http.StatusAccepted, response)
+		return
+	}
+	writeJSON(w, response)
 }
 
 func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *multipart.FileHeader, force bool, lang string) uploadResult {
@@ -92,6 +120,9 @@ func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *mul
 	if !supportedUploadExt[ext] {
 		res.Error = tr(lang, "upload.badformat")
 		return res
+	}
+	if ext == "fb2" && s.fb2ToEPUBEnabled(ctx) {
+		return s.queueFB2Conversion(ctx, fh, lang)
 	}
 
 	base := sanitizeFileName(strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename)))

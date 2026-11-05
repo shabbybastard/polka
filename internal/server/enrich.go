@@ -101,10 +101,14 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 			"fantlab":   cfg.FantLab,
 			"tastedive": cfg.TasteDive,
 		},
-		"tastediveKey":      cfg.TasteDiveKey,
-		"tagSources":        s.enabledTagSources(r.Context()),
-		"opdsEnabled":       s.opdsEnabled(r),
-		"homeHero":          s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
+		"tastediveKey": cfg.TasteDiveKey,
+		"tagSources":   s.enabledTagSources(r.Context()),
+		"opdsEnabled":  s.opdsEnabled(r),
+		"homeHero":     s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
+		"convert": map[string]bool{
+			"fb2ToEpub":  s.users.GetSetting(r.Context(), "convert.fb2_to_epub", "0") == "1",
+			"keepSource": s.keepConversionSource(r.Context()),
+		},
 		"smtp":              s.smtpSettings(r),
 		"collectionSources": s.sourcesJSON(r.Context()),
 		"library":           s.libraryStatus(),
@@ -138,8 +142,12 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		TagsEnabled  *bool           `json:"tagsEnabled"` // legacy single switch
 		OpdsEnabled  *bool           `json:"opdsEnabled"`
 		HomeHero     *bool           `json:"homeHero"`
-		Smtp         *smtpInput      `json:"smtp"`
-		Sources      map[string]bool `json:"collectionSources"`
+		Convert      *struct {
+			FB2ToEPUB  *bool `json:"fb2ToEpub"`
+			KeepSource *bool `json:"keepSource"`
+		} `json:"convert"`
+		Smtp    *smtpInput      `json:"smtp"`
+		Sources map[string]bool `json:"collectionSources"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -183,6 +191,20 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		if err := s.users.SetSetting(r.Context(), "home.hero", boolVal(*req.HomeHero)); err != nil {
 			s.apiError(w, err)
 			return
+		}
+	}
+	if req.Convert != nil {
+		if req.Convert.FB2ToEPUB != nil {
+			if err := s.users.SetSetting(r.Context(), "convert.fb2_to_epub", boolVal(*req.Convert.FB2ToEPUB)); err != nil {
+				s.apiError(w, err)
+				return
+			}
+		}
+		if req.Convert.KeepSource != nil {
+			if err := s.users.SetSetting(r.Context(), "convert.keep_source", boolVal(*req.Convert.KeepSource)); err != nil {
+				s.apiError(w, err)
+				return
+			}
 		}
 	}
 	if req.TagSources != nil {

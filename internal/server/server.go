@@ -15,6 +15,7 @@ import (
 	"github.com/vestigiumincaligne/polka/internal/auth"
 	"github.com/vestigiumincaligne/polka/internal/collections"
 	"github.com/vestigiumincaligne/polka/internal/config"
+	"github.com/vestigiumincaligne/polka/internal/conversions"
 	"github.com/vestigiumincaligne/polka/internal/enrich"
 	"github.com/vestigiumincaligne/polka/internal/library"
 	"github.com/vestigiumincaligne/polka/internal/store"
@@ -31,6 +32,7 @@ type Server struct {
 	sync      *syncer.Syncer // non-nil in server synchronization mode
 	enrich    *enrich.Provider
 	cols      *collections.Service // book collections (collections.db)
+	conv      *conversions.Store   // background FB2 -> EPUB queue
 	srcs      sourcesState         // external collection sources sync
 	imp       importState          // state of the background inpx web import
 	genreSync genreSyncState       // background external genre loading
@@ -55,6 +57,17 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 	if cfg.DataDir == "" {
 		// tests without a data directory: collections are unavailable
 	} else {
+		if conv, err := conversions.Open(filepath.Join(cfg.DataDir, "conversions.db")); err != nil {
+			log.Error("conversions database", "error", err)
+		} else {
+			s.conv = conv
+			if err := conv.ResetProcessing(context.Background()); err != nil {
+				log.Warn("reset conversion queue", "error", err)
+			}
+			if lib != nil {
+				go s.conversionLoop()
+			}
+		}
 		go s.backupLoop(context.Background())
 		if cs, err := collections.Open(filepath.Join(cfg.DataDir, "collections.db")); err != nil {
 			log.Error("collections database", "error", err)
@@ -121,6 +134,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			"POST /admin/books/{id}/forget-enrichment",
 			"POST /admin/import/inpx",
 			"GET /admin/import/status",
+			"GET /admin/conversions",
 			"GET /admin/settings",
 			"POST /admin/settings",
 			"POST /admin/genres/sync",
@@ -145,6 +159,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 			mux.HandleFunc("POST /admin/books/{id}/forget-enrichment", s.adminOnly(s.handleForgetBookEnrichment))
 			mux.HandleFunc("POST /admin/import/inpx", s.adminOnly(s.handleImportInpx))
 			mux.HandleFunc("GET /admin/import/status", s.adminOnly(s.handleImportStatus))
+			mux.HandleFunc("GET /admin/conversions", s.adminOnly(s.handleConversionList))
 		}
 
 		// Bulk book export (any logged-in user)
@@ -259,7 +274,12 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

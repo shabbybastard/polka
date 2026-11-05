@@ -60,9 +60,11 @@ mobile reading app.
   encrypted).
 - **Multi-user.** Accounts with admin/reader roles, per-user progress, lists
   and ratings. Or run it fully open on a trusted home network.
-- **Add books from the browser.** Upload fb2 / epub / pdf / djvu / txt / mobi;
+- **Add books from the browser.** Upload fb2 / epub / pdf / txt / mobi / azw3;
   metadata is extracted automatically and three-level duplicate detection
   (file hash → text hash → fuzzy metadata) keeps your collection clean.
+  New FB2 uploads can be queued for background FB2 → EPUB conversion with
+  source archiving and duplicate skipping.
 - **Two languages, three themes.** English and Russian UI, switchable in one
   click; genre names and the OPDS feed are localized too. The interface
   follows the system theme or can be forced to a light or graphite-gray dark

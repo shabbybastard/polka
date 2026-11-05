@@ -196,6 +196,7 @@ func TestRouteAccess(t *testing.T) {
 	}
 	adminRoutes := []route{
 		{"GET", "/admin/import/status", ""},
+		{"GET", "/admin/conversions", ""},
 		{"GET", "/admin/settings", ""},
 		{"GET", "/admin/genres/status", ""},
 		{"POST", "/admin/genres/sync", ""},

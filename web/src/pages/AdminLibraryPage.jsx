@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  fetchConversions,
   fetchSettings,
   genreSyncStatus,
   importInpx,
@@ -41,6 +42,10 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   // --- Book upload ---
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
+  const [convert, setConvert] = useState({ fb2ToEpub: false, keepSource: true });
+  const [conversionJobs, setConversionJobs] = useState([]);
+  const conversionPolling = useRef(null);
+  const conversionDone = useRef(new Set());
   const fileInput = useRef(null);
   const pendingFiles = useRef(new Map()); // file name -> File, for re-uploading with force
 
@@ -50,13 +55,50 @@ const AdminLibraryPage = ({ onConfigChange }) => {
       ...prev.filter((p) => !incoming.some((n) => n.name === p.name)),
     ]);
 
+  const refreshConversions = () => {
+    fetchConversions()
+      .then((res) => {
+        const jobs = res?.jobs ?? [];
+        setConversionJobs(jobs);
+        let newlyDone = false;
+        for (const job of jobs) {
+          if (job.status === "done" && !conversionDone.current.has(job.id)) {
+            conversionDone.current.add(job.id);
+            newlyDone = true;
+          }
+        }
+        if (newlyDone) onConfigChange?.();
+        const active = jobs.some((job) => job.status === "queued" || job.status === "processing");
+        if (active && !conversionPolling.current) {
+          conversionPolling.current = setInterval(refreshConversions, 1500);
+        } else if (!active && conversionPolling.current) {
+          clearInterval(conversionPolling.current);
+          conversionPolling.current = null;
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshConversions();
+    return () => {
+      if (conversionPolling.current) {
+        clearInterval(conversionPolling.current);
+        conversionPolling.current = null;
+      }
+    };
+  }, []);
+
   const onUpload = (e) => {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
     setUploading(true);
     for (const f of files) pendingFiles.current.set(f.name, f);
     uploadBooks(files)
-      .then((res) => mergeResults(res.results ?? []))
+      .then((res) => {
+        mergeResults(res.results ?? []);
+        if ((res.results ?? []).some((r) => r.status === "queued")) refreshConversions();
+      })
       .catch(() => alert(t("admin.upload.fail")))
       .finally(() => {
         setUploading(false);
@@ -69,7 +111,10 @@ const AdminLibraryPage = ({ onConfigChange }) => {
     if (!file || uploading) return;
     setUploading(true);
     uploadBooks([file], { force: true })
-      .then((res) => mergeResults(res.results ?? []))
+      .then((res) => {
+        mergeResults(res.results ?? []);
+        if ((res.results ?? []).some((r) => r.status === "queued")) refreshConversions();
+      })
       .catch(() => alert(t("admin.upload.fail")))
       .finally(() => setUploading(false));
   };
@@ -166,6 +211,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setTastediveKey(res.tastediveKey ?? "");
         setHomeHero(res.homeHero !== false);
         setOpdsEnabled(res.opdsEnabled !== false);
+        setConvert({ fb2ToEpub: false, keepSource: true, ...(res.convert ?? {}) });
         setSmtp(res.smtp ?? { security: "starttls", port: 587 });
         setLibrary(res.library ?? null);
       })
@@ -235,6 +281,15 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setHomeHero(!next);
         alert(t("admin.sources.saveFail"));
       });
+  };
+
+  const toggleConvert = (key) => {
+    const next = { ...convert, [key]: !convert[key] };
+    setConvert(next);
+    saveSettings({ convert: next }).catch(() => {
+      setConvert(convert);
+      alert(t("admin.sources.saveFail"));
+    });
   };
 
   const opdsUrl = `${window.location.origin}/opds`;
@@ -359,12 +414,32 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         <p className="library-admin__hint">
           {t("admin.upload.hint")}
         </p>
+        <div className="library-admin__convert">
+          <label className="library-admin__source">
+            <input
+              type="checkbox"
+              checked={Boolean(convert.fb2ToEpub)}
+              onChange={() => toggleConvert("fb2ToEpub")}
+            />
+            <span className="library-admin__source-name">{t("admin.convert.fb2ToEpub")}</span>
+            <span className="library-admin__source-hint">{t("admin.convert.fb2ToEpubHint")}</span>
+          </label>
+          <label className="library-admin__source">
+            <input
+              type="checkbox"
+              checked={Boolean(convert.keepSource)}
+              onChange={() => toggleConvert("keepSource")}
+            />
+            <span className="library-admin__source-name">{t("admin.convert.keepSource")}</span>
+            <span className="library-admin__source-hint">{t("admin.convert.keepSourceHint")}</span>
+          </label>
+        </div>
         <label className={`library-admin__dropzone ${uploading ? "is-busy" : ""}`}>
           <input
             ref={fileInput}
             type="file"
             multiple
-            accept=".fb2,.epub,.pdf,.djvu,.txt,.mobi,.azw3"
+            accept=".fb2,.epub,.pdf,.txt,.mobi,.azw3"
             onChange={onUpload}
             disabled={uploading}
           />
@@ -406,6 +481,11 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                       {t("admin.upload.force")}
                     </button>
                   </>
+                ) : r.status === "queued" ? (
+                  <>
+                    <span className="library-admin__file">{r.name}</span>
+                    <span className="library-admin__warn">{t("admin.convert.queued")}</span>
+                  </>
                 ) : (
                   <>
                     <Link to={`/book/${r.bookId}`} className="library-admin__file">
@@ -418,6 +498,30 @@ const AdminLibraryPage = ({ onConfigChange }) => {
               </li>
             ))}
           </ul>
+        )}
+
+        {conversionJobs.length > 0 && (
+          <>
+            <h3 className="library-admin__subhead">{t("admin.convert.jobs")}</h3>
+            <ul className="library-admin__results library-admin__conversions">
+              {conversionJobs.map((job) => (
+                <li key={job.id} className={`is-${job.status}`}>
+                  <span className="library-admin__file">{job.name}</span>
+                  <span className={`library-admin__conversion-status is-${job.status}`}>
+                    {t(`admin.convert.status.${job.status}`)}
+                  </span>
+                  {job.bookId > 0 && job.status !== "failed" && (
+                    <Link to={`/book/${job.bookId}`} className="library-admin__conversion-link">
+                      {t("admin.convert.open")}
+                    </Link>
+                  )}
+                  {job.status === "failed" && job.error && (
+                    <span className="library-admin__error">{job.error}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
 
