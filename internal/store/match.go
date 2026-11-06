@@ -29,11 +29,11 @@ func (s *Store) MatchBookExt(ctx context.Context, title, author, isbn string) (*
 		return nil, "", ErrNotFound
 	}
 	lastNames := authorLastNames(author)
-	if b, kind := s.matchByFTS(ctx, title, lastNames); b != nil {
+	if b, kind, err := s.matchByFTS(ctx, title, lastNames); err == nil && b != nil {
 		return b, kind, nil
 	}
 	if short := stripSubtitle(title); short != title {
-		if b, kind := s.matchByFTS(ctx, short, lastNames); b != nil {
+		if b, kind, err := s.matchByFTS(ctx, short, lastNames); err == nil && b != nil {
 			return b, kind, nil
 		}
 	}
@@ -80,14 +80,14 @@ func authorLastNames(author string) []string {
 	return out
 }
 
-func (s *Store) matchByFTS(ctx context.Context, title string, lastNames []string) (*Book, string) {
+func (s *Store) matchByFTS(ctx context.Context, title string, lastNames []string) (*Book, string, error) {
 	want := normalizeForMatch(title)
 	if want == "" {
-		return nil, ""
+		return nil, "", nil
 	}
 	titleQ := ftsQuery(title, "title")
 	if titleQ == "" {
-		return nil, ""
+		return nil, "", nil
 	}
 	var queries []string
 	for _, ln := range lastNames {
@@ -107,7 +107,7 @@ func (s *Store) matchByFTS(ctx context.Context, title string, lastNames []string
 			`b.id IN (SELECT rowid FROM book_search WHERE book_search MATCH ? LIMIT 200)`,
 			"", 0, 0, q)
 		if err != nil {
-			continue
+			return nil, "", err
 		}
 		for i := range candidates {
 			c := &candidates[i]
@@ -144,10 +144,10 @@ func (s *Store) matchByFTS(ctx context.Context, title string, lastNames []string
 			}
 		}
 		if best != nil {
-			return best, bestKind
+			return best, bestKind, nil
 		}
 	}
-	return nil, ""
+	return nil, "", nil
 }
 
 func authorMatches(authorNames string, lastNames []string) bool {

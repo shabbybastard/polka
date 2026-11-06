@@ -37,6 +37,7 @@ type PersonName struct {
 // ParseFB2 parses an FB2 as a stream. With withCover=true it reads on
 // until the <binary> with the cover; otherwise it stops after <description>.
 func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
+	r = io.LimitReader(r, 64<<20)
 	dec := xml.NewDecoder(r)
 	dec.CharsetReader = charset.NewReaderLabel
 	dec.Strict = false

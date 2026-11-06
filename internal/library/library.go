@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/bodgit/sevenzip"
+	"github.com/hashicorp/golang-lru/v2"
 )
 
 var (
@@ -43,8 +43,7 @@ const (
 type Library struct {
 	root string
 
-	mu     sync.Mutex
-	covers map[int64]coverEntry // bounded cover cache
+	covers *lru.Cache[int64, coverEntry] // bounded cover cache
 }
 
 type coverEntry struct {
@@ -58,7 +57,8 @@ func New(root string) *Library {
 	if root == "" {
 		return nil
 	}
-	return &Library{root: root, covers: make(map[int64]coverEntry, coverCacheSize)}
+	cache, _ := lru.New[int64, coverEntry](coverCacheSize)
+	return &Library{root: root, covers: cache}
 }
 
 // Health describes the state of the library root: whether it exists and how
@@ -447,31 +447,20 @@ func (l *Library) ReplaceBareEPUB(folder, file, ext string, data []byte) ([]byte
 
 // ForgetCover drops a cached cover after the book file is edited.
 func (l *Library) ForgetCover(bookID int64) {
-	l.mu.Lock()
-	delete(l.covers, bookID)
-	l.mu.Unlock()
+	l.covers.Remove(bookID)
 }
 
 func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string, error) {
-	l.mu.Lock()
-	if c, ok := l.covers[bookID]; ok {
-		l.mu.Unlock()
+	if c, ok := l.covers.Get(bookID); ok {
 		if c.data == nil {
 			return nil, "", ErrNoFile // negative cache
 		}
 		return c.data, c.mime, nil
 	}
-	l.mu.Unlock()
 
 	data, mime, err := l.extractCover(folder, file, ext)
 
-	l.mu.Lock()
-	if len(l.covers) >= coverCacheSize {
-		// simple eviction: drop the whole cache
-		l.covers = make(map[int64]coverEntry, coverCacheSize)
-	}
-	l.covers[bookID] = coverEntry{data: data, mime: mime}
-	l.mu.Unlock()
+	l.covers.Add(bookID, coverEntry{data: data, mime: mime})
 
 	if err != nil {
 		return nil, "", err

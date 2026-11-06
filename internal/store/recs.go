@@ -198,10 +198,12 @@ func (s *Store) SearchByISBN(ctx context.Context, isbn string) ([]Book, error) {
 }
 
 // SetBookISBN records a book's ISBN (lazy indexing on view).
-func (s *Store) SetBookISBN(ctx context.Context, bookID int64, isbn string) {
+func (s *Store) SetBookISBN(ctx context.Context, bookID int64, isbn string) error {
 	if n := NormalizeISBN(isbn); n != "" {
-		s.db.ExecContext(ctx, `UPDATE books SET isbn = ? WHERE id = ? AND isbn = ''`, n, bookID)
+		_, err := s.db.ExecContext(ctx, `UPDATE books SET isbn = ? WHERE id = ? AND isbn = ''`, n, bookID)
+		return err
 	}
+	return nil
 }
 
 // MatchBook finds a collection book by title and author (for mapping

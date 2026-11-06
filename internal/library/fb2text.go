@@ -29,6 +29,7 @@ type FB2Chapter struct {
 // sections of the first <body>; <body name="notes"> goes into the footnotes map.
 // imgURL builds an image URL from a <binary> id.
 func ParseFB2Text(r io.Reader, imgURL func(id string) string) (*FB2Text, error) {
+	r = io.LimitReader(r, 64<<20)
 	dec := xml.NewDecoder(r)
 	dec.CharsetReader = charset.NewReaderLabel
 	dec.Strict = false

@@ -212,7 +212,7 @@ func opdsPage(r *http.Request) int {
 // GET /opds — root navigation feed.
 func (s *Server) handleOpdsRoot(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	name := s.st.GetMeta(r.Context(), "collection_name", "Полка")
+	name, _ := s.st.GetMeta(r.Context(), "collection_name", "Полка")
 
 	feed := &opdsFeed{ID: "urn:polka:root", Title: name}
 	feed.Links = append(feed.Links, opdsLink{Rel: "self", Href: "/opds", Type: opdsNavType})

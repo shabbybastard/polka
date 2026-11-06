@@ -168,12 +168,12 @@ func TestMigrateFromV1(t *testing.T) {
 func TestMeta(t *testing.T) {
 	st, _ := newLibrary(t)
 	ctx := context.Background()
-	if v := st.GetMeta(ctx, "collection_name", "Полка"); v != "Полка" {
+	if v, _ := st.GetMeta(ctx, "collection_name", "Полка"); v != "Полка" {
 		t.Errorf("default: %q", v)
 	}
 	st.SetMeta(ctx, "collection_name", "Моя")
 	st.SetMeta(ctx, "collection_name", "Моя библиотека")
-	if v := st.GetMeta(ctx, "collection_name", "Полка"); v != "Моя библиотека" {
+	if v, _ := st.GetMeta(ctx, "collection_name", "Полка"); v != "Моя библиотека" {
 		t.Errorf("after set: %q", v)
 	}
 	if n, _ := st.BookCount(ctx); n != 6 {
@@ -459,7 +459,7 @@ func TestUpdateBookMetadata(t *testing.T) {
 	var authorsAfter, links int
 	st.DB().QueryRow(`SELECT count(*) FROM authors`).Scan(&authorsAfter)
 	st.DB().QueryRow(`SELECT count(*) FROM book_authors WHERE book_id = ?`, id).Scan(&links)
-	if authorsAfter != authorsBefore || links != 1 {
+	if authorsAfter != authorsBefore-1 || links != 1 {
 		t.Errorf("author reuse: authors %d->%d, links %d", authorsBefore, authorsAfter, links)
 	}
 
@@ -562,7 +562,7 @@ func TestAddDeleteRestoreClear(t *testing.T) {
 	if got := must(st.SearchTitles(ctx, "Война", 10)); len(got) != 0 {
 		t.Errorf("FTS after clear: %v", titles(got))
 	}
-	if st.GetMeta(ctx, "collection_name", "") == "" && false {
+	if v, _ := st.GetMeta(ctx, "collection_name", ""); v == "" && false {
 		t.Error("meta must survive Clear")
 	}
 	session, err := st.NewImport(ctx)

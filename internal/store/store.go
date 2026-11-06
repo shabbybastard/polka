@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/shabbybastard/polka/internal/sqlitedrv"
@@ -125,12 +126,16 @@ func (s *Store) BookCount(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func (s *Store) GetMeta(ctx context.Context, key, def string) string {
+func (s *Store) GetMeta(ctx context.Context, key, def string) (string, error) {
 	var v string
-	if err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v); err != nil {
-		return def
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return def, nil
+		}
+		return def, err
 	}
-	return v
+	return v, nil
 }
 
 func (s *Store) SetMeta(ctx context.Context, key, value string) error {

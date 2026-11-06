@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	bundled "github.com/shabbybastard/polka/collections"
@@ -274,7 +276,7 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 
 	return &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           securityHeaders(s.logRequests(s.maybeDemo(mux))),
+		Handler:           securityHeaders(s.logRequests(s.originCheck(s.maybeDemo(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}, s
 }
@@ -310,7 +312,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"collectionName": s.st.GetMeta(r.Context(), "collection_name", "Полка"),
+		"collectionName": func() string { v, _ := s.st.GetMeta(r.Context(), "collection_name", "Полка"); return v }(),
 		"numberOfBooks":  count,
 		"homeHero":       s.users.GetSetting(r.Context(), "home.hero", "1") == "1",
 	})
@@ -319,6 +321,30 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 func init() {
 	// Go does not know .webmanifest out of the box.
 	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
+
+// originCheck is a defense-in-depth CSRF mitigation: for cookie-authenticated
+// state-changing requests, verify that Origin/Referer matches the host.
+func (s *Server) originCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			if _, err := r.Cookie(sessionCookie); err == nil {
+				if origin := r.Header.Get("Origin"); origin != "" {
+					if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Host, r.Host) {
+						http.Error(w, "forbidden", http.StatusForbidden)
+						return
+					}
+				} else if ref := r.Header.Get("Referer"); ref != "" {
+					if u, err := url.Parse(ref); err != nil || !strings.EqualFold(u.Host, r.Host) {
+						http.Error(w, "forbidden", http.StatusForbidden)
+						return
+					}
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves the embedded frontend, falling back to index.html

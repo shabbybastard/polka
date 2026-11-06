@@ -342,9 +342,7 @@ func TestCover(t *testing.T) {
 	for i := int64(1000); i < 1000+coverCacheSize+1; i++ {
 		fresh.Cover(i, "missing.zip", "1", "fb2")
 	}
-	fresh.mu.Lock()
-	n := len(fresh.covers)
-	fresh.mu.Unlock()
+	n := fresh.covers.Len()
 	if n > coverCacheSize {
 		t.Errorf("cover cache grew to %d", n)
 	}

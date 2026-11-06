@@ -82,7 +82,7 @@ func TestImportInpx(t *testing.T) {
 	if n, _ := st.BookCount(ctx); n != 3 {
 		t.Errorf("BookCount = %d, want 3", n)
 	}
-	if name := st.GetMeta(ctx, "collection_name", ""); name != "Тестовая коллекция" {
+	if name, _ := st.GetMeta(ctx, "collection_name", ""); name != "Тестовая коллекция" {
 		t.Errorf("collection_name = %q", name)
 	}
 

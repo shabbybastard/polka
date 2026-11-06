@@ -413,7 +413,9 @@ func (s *Server) handleGetBookForm(w http.ResponseWriter, r *http.Request) {
 			resp["isbn"] = meta.ISBN
 			resp["language"] = meta.Lang
 			// Lazy indexing: the ISBN from the file becomes searchable.
-			s.st.SetBookISBN(r.Context(), d.ID, meta.ISBN)
+			if err := s.st.SetBookISBN(r.Context(), d.ID, meta.ISBN); err != nil {
+				s.log.Warn("set isbn", "book", d.ID, "error", err)
+			}
 		} else if !errors.Is(err, library.ErrNoFile) {
 			s.log.Warn("fb2 meta", "book", d.ID, "error", err)
 		}
