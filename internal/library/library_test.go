@@ -466,6 +466,16 @@ func TestParseEPUBFile(t *testing.T) {
 	}
 }
 
+func TestReadLimited(t *testing.T) {
+	data, err := readLimited(strings.NewReader("12345"), 5)
+	if err != nil || string(data) != "12345" {
+		t.Fatalf("readLimited exact limit: %q, %v", data, err)
+	}
+	if _, err := readLimited(strings.NewReader("123456"), 5); err == nil {
+		t.Fatal("readLimited must reject data over the limit")
+	}
+}
+
 func TestArchiveCandidates(t *testing.T) {
 	cases := map[string][]string{
 		"/lib/a.zip": {"/lib/a.zip", "/lib/a.7z"},

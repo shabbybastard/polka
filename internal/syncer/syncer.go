@@ -172,11 +172,11 @@ func New(dataDir string, cfg Config, users *auth.Service, log *slog.Logger) (*Sy
 	}
 
 	s := &Syncer{
-		cfg:    cfg,
-		log:    log,
-		users:  users,
-		db:     db,
-		dir:    dir,
+		cfg:   cfg,
+		log:   log,
+		users: users,
+		db:    db,
+		dir:   dir,
 		client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},

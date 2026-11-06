@@ -91,6 +91,14 @@ func TestMatchBookExt(t *testing.T) {
 	}
 }
 
+func TestMatchBookExtPropagatesErrors(t *testing.T) {
+	st := newMatchStore(t)
+	st.Close()
+	if _, _, err := st.MatchBookExt(context.Background(), "Война и мир", "Толстой", ""); err == nil {
+		t.Fatal("MatchBookExt must return a database error")
+	}
+}
+
 func TestMatchBookExtISBN(t *testing.T) {
 	st := newMatchStore(t)
 	ctx := context.Background()

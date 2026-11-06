@@ -323,6 +323,23 @@ func init() {
 	mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
+// requestHost returns the public host of the request. Behind a trusted proxy
+// X-Forwarded-Host is used so Origin/Referer checks keep working when the
+// proxy preserves the original host there rather than in Host.
+func requestHost(r *http.Request) string {
+	if trustProxyHeaders() {
+		if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+			if i := strings.IndexByte(forwarded, ','); i >= 0 {
+				forwarded = forwarded[:i]
+			}
+			if host := strings.TrimSpace(forwarded); host != "" {
+				return host
+			}
+		}
+	}
+	return r.Host
+}
+
 // originCheck is a defense-in-depth CSRF mitigation: for cookie-authenticated
 // state-changing requests, verify that Origin/Referer matches the host.
 func (s *Server) originCheck(next http.Handler) http.Handler {
@@ -330,13 +347,14 @@ func (s *Server) originCheck(next http.Handler) http.Handler {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			if _, err := r.Cookie(sessionCookie); err == nil {
+				host := requestHost(r)
 				if origin := r.Header.Get("Origin"); origin != "" {
-					if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Host, r.Host) {
+					if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Host, host) {
 						http.Error(w, "forbidden", http.StatusForbidden)
 						return
 					}
 				} else if ref := r.Header.Get("Referer"); ref != "" {
-					if u, err := url.Parse(ref); err != nil || !strings.EqualFold(u.Host, r.Host) {
+					if u, err := url.Parse(ref); err != nil || !strings.EqualFold(u.Host, host) {
 						http.Error(w, "forbidden", http.StatusForbidden)
 						return
 					}

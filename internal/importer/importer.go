@@ -34,7 +34,11 @@ func ImportInpx(ctx context.Context, log *slog.Logger, st *store.Store, path str
 	if err != nil {
 		return stats, err
 	}
-	defer session.Abort()
+	defer func() {
+		if err := session.Abort(); err != nil {
+			log.Warn("import cleanup", "error", err)
+		}
+	}()
 
 	processed := 0
 	err = f.Records(func(rec *inpx.Record) error {

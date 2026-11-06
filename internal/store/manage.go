@@ -188,8 +188,12 @@ func (s *Store) UpdateBookMetadata(ctx context.Context, bookID int64, title stri
 
 	// Drop authors no longer referenced by any book, keeping authors_search
 	// in sync so search does not keep stale rows.
-	tx.ExecContext(ctx, `DELETE FROM authors_search WHERE rowid IN (SELECT id FROM authors a WHERE NOT EXISTS (SELECT 1 FROM book_authors ba WHERE ba.author_id = a.id))`)
-	tx.ExecContext(ctx, `DELETE FROM authors WHERE id NOT IN (SELECT author_id FROM book_authors)`)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM authors_search WHERE rowid IN (SELECT id FROM authors a WHERE NOT EXISTS (SELECT 1 FROM book_authors ba WHERE ba.author_id = a.id))`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM authors WHERE id NOT IN (SELECT author_id FROM book_authors)`); err != nil {
+		return err
+	}
 
 	// Keep the book_search row in sync with the new title/author names.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM book_search WHERE rowid = ?`, bookID); err != nil {

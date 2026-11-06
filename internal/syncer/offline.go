@@ -15,6 +15,11 @@ import (
 
 var ErrOffline = errors.New("book is not available offline")
 
+const (
+	maxOfflineBookSize  = 1 << 30
+	maxOfflineCoverSize = 4 << 20
+)
+
 // MakeOffline downloads a book from the server into the local cache:
 // the card from getBookForm, the file and the cover.
 func (s *Syncer) MakeOffline(ctx context.Context, bookID int64) (*OfflineBook, error) {
@@ -66,11 +71,15 @@ func (s *Syncer) MakeOffline(ctx context.Context, bookID int64) (*OfflineBook, e
 	if err != nil {
 		return nil, err
 	}
-	size, err := io.Copy(dst, io.LimitReader(fresp.Body, 1<<30))
+	size, err := io.Copy(dst, io.LimitReader(fresp.Body, maxOfflineBookSize+1))
 	dst.Close()
 	if err != nil {
 		os.Remove(path + ".part")
 		return nil, err
+	}
+	if size > maxOfflineBookSize {
+		os.Remove(path + ".part")
+		return nil, fmt.Errorf("book is too large for the offline cache")
 	}
 	if err := os.Rename(path+".part", path); err != nil {
 		return nil, err
@@ -81,8 +90,12 @@ func (s *Syncer) MakeOffline(ctx context.Context, bookID int64) (*OfflineBook, e
 	var coverMime string
 	if cresp, err := s.request(ctx, http.MethodGet, fmt.Sprintf("/Images/covers/%d", bookID), nil); err == nil {
 		if cresp.StatusCode == http.StatusOK {
-			cover, _ = io.ReadAll(io.LimitReader(cresp.Body, 4<<20))
-			coverMime = cresp.Header.Get("Content-Type")
+			cover, _ = io.ReadAll(io.LimitReader(cresp.Body, maxOfflineCoverSize+1))
+			if len(cover) > maxOfflineCoverSize {
+				cover = nil
+			} else if len(cover) > 0 {
+				coverMime = cresp.Header.Get("Content-Type")
+			}
 		}
 		cresp.Body.Close()
 	}

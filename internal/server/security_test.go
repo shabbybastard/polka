@@ -26,6 +26,80 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestOriginCheck(t *testing.T) {
+	s := &Server{}
+	h := s.originCheck(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	run := func(method, target, origin, referer string, cookie bool) int {
+		req := httptest.NewRequest(method, target, nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+		if cookie {
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "token"})
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := run(http.MethodPost, "http://example.com/api", "http://example.com", "", true); got != http.StatusNoContent {
+		t.Errorf("same-origin POST = %d", got)
+	}
+	if got := run(http.MethodPost, "http://example.com/api", "http://evil.example", "", true); got != http.StatusForbidden {
+		t.Errorf("cross-origin POST = %d", got)
+	}
+	if got := run(http.MethodPost, "http://example.com/api", "", "http://example.com/page", true); got != http.StatusNoContent {
+		t.Errorf("same-origin Referer = %d", got)
+	}
+	if got := run(http.MethodPost, "http://example.com/api", "", "http://evil.example/page", true); got != http.StatusForbidden {
+		t.Errorf("cross-origin Referer = %d", got)
+	}
+	if got := run(http.MethodPost, "http://example.com/api", "http://evil.example", "", false); got != http.StatusNoContent {
+		t.Errorf("anonymous POST = %d", got)
+	}
+	if got := run(http.MethodGet, "http://example.com/api", "http://evil.example", "", true); got != http.StatusNoContent {
+		t.Errorf("cross-origin GET = %d", got)
+	}
+}
+
+func TestOriginCheckTrustedProxyHost(t *testing.T) {
+	t.Setenv("POLKA_TRUST_PROXY", "1")
+	s := &Server{}
+	h := s.originCheck(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "http://internal:12791/api", nil)
+	req.Host = "internal:12791"
+	req.Header.Set("X-Forwarded-Host", "books.example")
+	req.Header.Set("Origin", "https://books.example")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "token"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("trusted forwarded host = %d", rec.Code)
+	}
+}
+
+func TestSafeImageMime(t *testing.T) {
+	cases := map[string]string{
+		"":              "image/jpeg",
+		"image/jpg":     "image/jpeg",
+		"image/png":     "image/png",
+		"text/html":     "application/octet-stream",
+		"image/svg+xml": "application/octet-stream",
+	}
+	for in, want := range cases {
+		if got := safeImageMime(in); got != want {
+			t.Errorf("safeImageMime(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRateLimiter(t *testing.T) {
 	rl := newRateLimiter(3, time.Minute)
 	for i := 0; i < 3; i++ {

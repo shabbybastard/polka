@@ -2,6 +2,7 @@ package library
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"image"
@@ -110,8 +111,12 @@ func EPUBText(r io.ReaderAt, size int64, imgURL func(string) string) (*FB2Text, 
 		if err != nil {
 			continue
 		}
-		title, body := epubChapterHTML(rc, path.Dir(docPath), imgURL, imgDims)
+		chapter, err := readLimited(rc, maxArchiveEntrySize)
 		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", docPath, err)
+		}
+		title, body := epubChapterHTML(bytes.NewReader(chapter), path.Dir(docPath), imgURL, imgDims)
 		if strings.TrimSpace(body) == "" {
 			continue
 		}
@@ -335,7 +340,7 @@ func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) 
 		return nil, "", ErrNoFile
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(io.LimitReader(rc, maxCoverSize))
+	data, err := readLimited(rc, maxCoverSize)
 	if err != nil {
 		return nil, "", err
 	}

@@ -212,7 +212,7 @@ Everything has a sensible default. The most useful flags of `polka serve`:
 | `--library-dir` | — | folder with books (or inpx archives) |
 | `--auth` | `required` | `required` (accounts), `public` (open access) or `demo` (ephemeral guest sessions); the desktop app sets `desktop` internally |
 | `--telegram-token` | — | optional Telegram bot token; also `POLKA_TELEGRAM_TOKEN` |
-| `POLKA_TRUST_PROXY` | off | set to `1` when running behind a trusted reverse proxy so `X-Forwarded-For` / `X-Forwarded-Proto` are honoured for rate limiting and secure cookies |
+| `POLKA_TRUST_PROXY` | off | set to `1` when running behind a trusted reverse proxy so `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` are honoured for rate limiting, secure cookies and origin checks. The proxy must preserve the original host or set `X-Forwarded-Host` |
 
 External rating/recommendation sources are configured in the web UI
 (*Manage → External ratings / Similar books*) and are **off by default**

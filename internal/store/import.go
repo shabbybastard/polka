@@ -48,12 +48,13 @@ type ImportStats struct {
 // ImportSession loads books in batches: inserts run in large transactions
 // without indexes; the indexes and the FTS search index are built once in Finish.
 type ImportSession struct {
-	s     *Store
-	ctx   context.Context
-	tx    *sql.Tx
-	stmts importStmts
-	batch int
-	start time.Time
+	s        *Store
+	ctx      context.Context
+	tx       *sql.Tx
+	stmts    importStmts
+	batch    int
+	start    time.Time
+	finished bool
 
 	folders  map[string]int64
 	series   map[string]int64
@@ -290,17 +291,25 @@ func (im *ImportSession) Finish() (ImportStats, error) {
 	im.stats.Series = len(im.series)
 	im.stats.Genres = len(im.genres)
 	im.stats.Duration = time.Since(im.start)
+	im.finished = true
 	return im.stats, nil
 }
 
 // Abort rolls back the uncommitted part of the import and tries to restore
 // the indexes that NewImport dropped, so the database is not left unindexed.
-func (im *ImportSession) Abort() {
+// A successful Finish already rebuilt everything; do not do it twice.
+func (im *ImportSession) Abort() error {
+	if im.finished {
+		return nil
+	}
 	if im.tx != nil {
 		im.tx.Rollback()
+		im.tx = nil
 	}
 	im.closeStmts()
-	im.s.RebuildIndexes(im.ctx)
+	// The import context may be canceled (shutdown/request cancellation).
+	// Cleanup must still run, so use a fresh context.
+	return im.s.RebuildIndexes(context.Background())
 }
 
 func (im *ImportSession) closeStmts() {

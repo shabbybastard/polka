@@ -45,6 +45,12 @@ func EditEPUB(data []byte, edit EPUBEdit) ([]byte, error) {
 	entries := make([]epubEntry, 0, len(zr.File))
 	byName := make(map[string]int, len(zr.File))
 	for _, f := range zr.File {
+		// Directory entries are normal in many EPUB files and carry no data.
+		// Skip them before the path check: names like "META-INF/" would
+		// otherwise be rejected as unsafe.
+		if f.FileInfo().IsDir() || strings.HasSuffix(f.Name, "/") {
+			continue
+		}
 		if !safeArchiveName(f.Name) {
 			return nil, fmt.Errorf("epub: unsafe entry name %q", f.Name)
 		}
@@ -55,7 +61,7 @@ func EditEPUB(data []byte, edit EPUBEdit) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		content, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		content, err := readLimited(rc, maxArchiveEntrySize)
 		rc.Close()
 		if err != nil {
 			return nil, err

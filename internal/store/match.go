@@ -20,7 +20,11 @@ const (
 // second attempt. Returns the match kind or ErrNotFound.
 func (s *Store) MatchBookExt(ctx context.Context, title, author, isbn string) (*Book, string, error) {
 	if n := NormalizeISBN(isbn); n != "" {
-		if books, err := s.SearchByISBN(ctx, n); err == nil && len(books) > 0 {
+		books, err := s.SearchByISBN(ctx, n)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(books) > 0 {
 			return &books[0], MatchISBN, nil
 		}
 	}
@@ -29,11 +33,19 @@ func (s *Store) MatchBookExt(ctx context.Context, title, author, isbn string) (*
 		return nil, "", ErrNotFound
 	}
 	lastNames := authorLastNames(author)
-	if b, kind, err := s.matchByFTS(ctx, title, lastNames); err == nil && b != nil {
+	b, kind, err := s.matchByFTS(ctx, title, lastNames)
+	if err != nil {
+		return nil, "", err
+	}
+	if b != nil {
 		return b, kind, nil
 	}
 	if short := stripSubtitle(title); short != title {
-		if b, kind, err := s.matchByFTS(ctx, short, lastNames); err == nil && b != nil {
+		b, kind, err = s.matchByFTS(ctx, short, lastNames)
+		if err != nil {
+			return nil, "", err
+		}
+		if b != nil {
 			return b, kind, nil
 		}
 	}

@@ -40,6 +40,20 @@ const (
 	maxCoverSize        = 16 << 20
 )
 
+// readLimited reads at most max bytes and reports an error when the input is
+// larger. A plain io.LimitReader would silently truncate the data and could
+// produce a corrupt EPUB or a broken image.
+func readLimited(r io.Reader, max int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("input exceeds %d bytes", max)
+	}
+	return data, nil
+}
+
 type Library struct {
 	root string
 
@@ -145,7 +159,7 @@ func (l *Library) Open(folder, file, ext string) (io.ReadCloser, int64, error) {
 // regular zip-epub so everything downstream (reading, cover, download) works
 // like a normal epub. A regular zip-epub is returned as is.
 func unwrapEPUB(rc io.ReadCloser) (io.ReadCloser, int64, error) {
-	data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+	data, err := readLimited(rc, maxArchiveEntrySize)
 	rc.Close()
 	if err != nil {
 		return nil, 0, err
@@ -206,7 +220,7 @@ func sevenZToEpub(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		b, err := io.ReadAll(io.LimitReader(erc, maxArchiveEntrySize))
+		b, err := readLimited(erc, maxArchiveEntrySize)
 		erc.Close()
 		if err != nil {
 			return nil, err
@@ -522,7 +536,7 @@ func coverArchiveEntry(archivePath, bookid string) ([]byte, string, bool) {
 			return nil, "", false
 		}
 		defer rc.Close()
-		data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		data, err := readLimited(rc, maxArchiveEntrySize)
 		if err != nil || len(data) == 0 {
 			return nil, "", false
 		}
@@ -587,7 +601,7 @@ func (l *Library) extractCover(folder, file, ext string) ([]byte, string, error)
 		}
 		defer rc.Close()
 		// zip needs random access; an EPUB fits in memory comfortably
-		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		raw, err := readLimited(rc, maxArchiveEntrySize)
 		if err != nil {
 			return nil, "", err
 		}
@@ -614,7 +628,7 @@ func (l *Library) Text(folder, file, ext string, imgURL func(string) string) (*F
 	case "txt":
 		return ParseTXT(rc)
 	case "epub":
-		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		raw, err := readLimited(rc, maxArchiveEntrySize)
 		if err != nil {
 			return nil, err
 		}
@@ -639,7 +653,7 @@ func (l *Library) Binary(folder, file, ext, id string) ([]byte, string, error) {
 			return nil, "", err
 		}
 		defer rc.Close()
-		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		raw, err := readLimited(rc, maxArchiveEntrySize)
 		if err != nil {
 			return nil, "", err
 		}
@@ -660,7 +674,7 @@ func (l *Library) Meta(folder, file, ext string) (*FB2Meta, error) {
 	case "fb2":
 		return ParseFB2(rc, false)
 	case "epub":
-		data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
+		data, err := readLimited(rc, maxArchiveEntrySize)
 		if err != nil {
 			return nil, err
 		}

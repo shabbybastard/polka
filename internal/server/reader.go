@@ -213,6 +213,9 @@ func (s *Server) handleReadImage(w http.ResponseWriter, r *http.Request) {
 func safeImageMime(m string) string {
 	m = strings.ToLower(strings.TrimSpace(m))
 	switch m {
+	case "":
+		// Covers cached by older versions may have no MIME recorded.
+		return "image/jpeg"
 	case "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp":
 		if m == "image/jpg" {
 			return "image/jpeg"

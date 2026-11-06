@@ -3,6 +3,7 @@ package library
 import (
 	"archive/zip"
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,42 @@ func TestEditEPUBEPUB2Cover(t *testing.T) {
 	cover, mime, err := EPUBCover(bytes.NewReader(updated), int64(len(updated)))
 	if err != nil || mime != "image/png" || !bytes.Equal(cover, pngBytes) {
 		t.Errorf("epub2 cover: %d %q %v", len(cover), mime, err)
+	}
+}
+
+func TestEditEPUBWithDirectoryEntries(t *testing.T) {
+	original := epubZip(t, false, false)
+	zr, err := zip.NewReader(bytes.NewReader(original), int64(len(original)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range zr.File {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: f.Name, Method: f.Method})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(w, rc); err != nil {
+			rc.Close()
+			t.Fatal(err)
+		}
+		rc.Close()
+	}
+	// Common in EPUBs produced by some tools, and previously rejected.
+	if _, err := zw.Create("META-INF/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := EditEPUB(buf.Bytes(), EPUBEdit{Title: "With directory entry", Authors: []string{"Author"}}); err != nil {
+		t.Fatalf("EditEPUB: %v", err)
 	}
 }
 

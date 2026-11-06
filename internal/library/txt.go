@@ -18,7 +18,7 @@ const (
 // ParseTXT turns a plain-text file into chapters for the reader.
 // Non-UTF-8 files are assumed to be windows-1251 (the de facto standard for Russian txt).
 func ParseTXT(r io.Reader) (*FB2Text, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, txtMaxSize))
+	raw, err := readLimited(r, txtMaxSize)
 	if err != nil {
 		return nil, fmt.Errorf("txt read: %w", err)
 	}
