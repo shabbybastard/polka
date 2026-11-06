@@ -22,6 +22,24 @@ var (
 	ErrNotBareFile = errors.New("editing is only supported for a bare EPUB file")
 )
 
+// safeArchiveName rejects names that could escape the archive root.
+func safeArchiveName(name string) bool {
+	if strings.Contains(name, "\\") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+const (
+	maxArchiveEntrySize = 256 << 20
+	maxCoverSize        = 16 << 20
+)
+
 type Library struct {
 	root string
 
@@ -127,7 +145,7 @@ func (l *Library) Open(folder, file, ext string) (io.ReadCloser, int64, error) {
 // regular zip-epub so everything downstream (reading, cover, download) works
 // like a normal epub. A regular zip-epub is returned as is.
 func unwrapEPUB(rc io.ReadCloser) (io.ReadCloser, int64, error) {
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 	rc.Close()
 	if err != nil {
 		return nil, 0, err
@@ -181,14 +199,14 @@ func sevenZToEpub(data []byte) ([]byte, error) {
 			continue
 		}
 		name := strings.TrimPrefix(e.Name, prefix)
-		if name == "" || strings.HasSuffix(name, "/") {
+		if name == "" || strings.HasSuffix(name, "/") || !safeArchiveName(name) {
 			continue
 		}
 		erc, err := e.Open()
 		if err != nil {
 			return nil, err
 		}
-		b, err := io.ReadAll(erc)
+		b, err := io.ReadAll(io.LimitReader(erc, maxArchiveEntrySize))
 		erc.Close()
 		if err != nil {
 			return nil, err
@@ -349,6 +367,19 @@ func (z *sevenzEntryReader) Close() error {
 // rejecting "../" and absolute components.
 func pathInside(root, rel string) bool {
 	full := filepath.Join(root, filepath.FromSlash(rel))
+	// Resolve symlinks where possible so a link inside the root cannot
+	// point outside it. Fall back to the lexical path when a component
+	// does not exist yet (e.g. a file being created).
+	if rr, err := filepath.EvalSymlinks(root); err == nil {
+		root = rr
+	}
+	if rf, err := filepath.EvalSymlinks(full); err == nil {
+		full = rf
+	} else {
+		if parent, err := filepath.EvalSymlinks(filepath.Dir(full)); err == nil {
+			full = filepath.Join(parent, filepath.Base(full))
+		}
+	}
 	r, err := filepath.Rel(root, full)
 	if err != nil {
 		return false
@@ -502,7 +533,7 @@ func coverArchiveEntry(archivePath, bookid string) ([]byte, string, bool) {
 			return nil, "", false
 		}
 		defer rc.Close()
-		data, err := io.ReadAll(rc)
+		data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		if err != nil || len(data) == 0 {
 			return nil, "", false
 		}
@@ -567,7 +598,7 @@ func (l *Library) extractCover(folder, file, ext string) ([]byte, string, error)
 		}
 		defer rc.Close()
 		// zip needs random access; an EPUB fits in memory comfortably
-		raw, err := io.ReadAll(rc)
+		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		if err != nil {
 			return nil, "", err
 		}
@@ -594,7 +625,7 @@ func (l *Library) Text(folder, file, ext string, imgURL func(string) string) (*F
 	case "txt":
 		return ParseTXT(rc)
 	case "epub":
-		raw, err := io.ReadAll(rc)
+		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		if err != nil {
 			return nil, err
 		}
@@ -619,7 +650,7 @@ func (l *Library) Binary(folder, file, ext, id string) ([]byte, string, error) {
 			return nil, "", err
 		}
 		defer rc.Close()
-		raw, err := io.ReadAll(rc)
+		raw, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		if err != nil {
 			return nil, "", err
 		}
@@ -640,7 +671,7 @@ func (l *Library) Meta(folder, file, ext string) (*FB2Meta, error) {
 	case "fb2":
 		return ParseFB2(rc, false)
 	case "epub":
-		data, err := io.ReadAll(rc)
+		data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		if err != nil {
 			return nil, err
 		}

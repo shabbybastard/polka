@@ -40,7 +40,9 @@ func ByID(id string) Source {
 
 const userAgent = "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0 polka-collections"
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	return http.ErrUseLastResponse
+}}
 
 // get downloads a page (up to 4 MB), identifying as a browser.
 func get(ctx context.Context, rawURL string) ([]byte, error) {

@@ -42,7 +42,7 @@ const (
 	blockedBackoff = time.Hour
 
 	// Bump this when the parser or the cached result shape changes.
-	cacheVersion = 4
+	cacheVersion = 5
 )
 
 // Sources lists all sources in priority order.
@@ -820,7 +820,11 @@ func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throt
 	if throttle {
 		p.throttle(ctx, SourceFantLab)
 	}
-	body, err := p.get(ctx, p.FantLabBase+"/search-works?q="+url.QueryEscape(title), true)
+	q := title
+	if first := firstAuthor(author); first != "" {
+		q += " " + first
+	}
+	body, err := p.get(ctx, p.FantLabBase+"/search-works?q="+url.QueryEscape(q), true)
 	if err != nil {
 		return nil, err
 	}
@@ -844,11 +848,19 @@ func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throt
 		return nil, err
 	}
 	var pickedID string
-	for _, m := range search.Matches {
+	bestScore := 0
+	for i := range search.Matches {
+		m := &search.Matches[i]
 		if !fantlabBookType(m.NameEng, m.WorkTypeName, m.WorkTypeID) {
 			continue
 		}
-		if !titlesMatch(title, m.RusName) && !titlesMatch(title, m.Name) {
+		score := 0
+		switch {
+		case normalizeName(m.RusName) == normalizeName(title) || normalizeName(m.Name) == normalizeName(title):
+			score += 4
+		case titlesMatch(title, m.RusName) || titlesMatch(title, m.Name):
+			score += 2
+		default:
 			continue
 		}
 		if author != "" {
@@ -856,10 +868,11 @@ func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throt
 			if !authorsMatch(author, names) {
 				continue
 			}
+			score += 3
 		}
-		if id := string(m.WorkID); id != "" && id != "0" {
+		if id := string(m.WorkID); id != "" && id != "0" && score > bestScore {
+			bestScore = score
 			pickedID = id
-			break
 		}
 	}
 	if pickedID == "" {

@@ -194,10 +194,11 @@ func (s *Store) UpdateBookMetadata(ctx context.Context, bookID int64, title stri
 	for _, a := range authors {
 		a.Last = strings.TrimSpace(a.Last)
 		a.First = strings.TrimSpace(a.First)
-		if a.Last == "" && a.First == "" {
+		a.Middle = strings.TrimSpace(a.Middle)
+		if a.Last == "" && a.First == "" && a.Middle == "" {
 			continue
 		}
-		searchAuthors = append(searchAuthors, strings.TrimSpace(a.Last+" "+a.First))
+		searchAuthors = append(searchAuthors, strings.TrimSpace(a.Last+" "+a.First+" "+a.Middle))
 	}
 	var seriesTitle string
 	if err := tx.QueryRowContext(ctx, `
@@ -237,7 +238,13 @@ func (s *Store) DeleteBookDigests(ctx context.Context, bookID int64) error {
 
 // SetBookDeleted hides or restores a book, keeping the FTS index in sync.
 func (s *Store) SetBookDeleted(ctx context.Context, bookID int64, deleted bool) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE books SET deleted = ? WHERE id = ?`, boolToInt(deleted), bookID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `UPDATE books SET deleted = ? WHERE id = ?`, boolToInt(deleted), bookID)
 	if err != nil {
 		return err
 	}
@@ -248,18 +255,24 @@ func (s *Store) SetBookDeleted(ctx context.Context, bookID int64, deleted bool) 
 	// Deleted books are kept out of the FTS index (so search counts stay
 	// honest); drop any stale row first so a restore never hits a
 	// duplicate rowid.
-	if _, err = s.db.ExecContext(ctx, `DELETE FROM book_search WHERE rowid = ?`, bookID); err != nil || deleted {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM book_search WHERE rowid = ?`, bookID); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
+	if deleted {
+		return tx.Commit()
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO book_search (rowid, title, authors, series)
 		SELECT b.id, b.title,
-		       coalesce((SELECT group_concat(trim(a.last_name || ' ' || a.first_name), ' ')
+		       coalesce((SELECT group_concat(trim(a.last_name || ' ' || a.first_name || ' ' || a.middle_name), ' ')
 		                 FROM book_authors ba JOIN authors a ON a.id = ba.author_id
 		                 WHERE ba.book_id = b.id), ''),
 		       coalesce(s.title, '')
 		FROM books b LEFT JOIN series s ON s.id = b.series_id WHERE b.id = ?`, bookID)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Clear empties the collection (for re-import on a running server).
@@ -270,12 +283,17 @@ func (s *Store) Clear(ctx context.Context) error {
 		"book_authors", "book_genres", "book_keywords",
 		"books", "authors", "series", "genres", "keywords", "folders", "book_digests",
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, table := range tables {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // FindByHash looks up a live book by an exact match of the file hash or
@@ -420,20 +438,28 @@ func (s *Store) BooksByIDs(ctx context.Context, ids []int64) ([]Book, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
+	const chunkSize = 500
+	byID := make(map[int64]Book, len(ids))
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk)-1) + "?"
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		books, err := s.queryBooks(ctx, `b.id IN (`+placeholders+`)`, "", 0, 0, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range books {
+			byID[b.ID] = b
+		}
 	}
-	books, err := s.queryBooks(ctx, `b.id IN (`+placeholders+`)`, "", 0, 0, args...)
-	if err != nil {
-		return nil, err
-	}
-	byID := make(map[int64]Book, len(books))
-	for _, b := range books {
-		byID[b.ID] = b
-	}
-	ordered := make([]Book, 0, len(books))
+	ordered := make([]Book, 0, len(byID))
 	for _, id := range ids {
 		if b, ok := byID[id]; ok {
 			ordered = append(ordered, b)
@@ -447,27 +473,42 @@ func (s *Store) BookFilesByIDs(ctx context.Context, ids []int64) ([]BookFile, er
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := s.db.QueryContext(ctx, `
+	const chunkSize = 500
+	var files []BookFile
+	seen := make(map[int64]bool)
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk)-1) + "?"
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size
 		FROM books b JOIN folders fo ON fo.id = b.folder_id
 		WHERE b.deleted = 0 AND b.id IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var files []BookFile
-	for rows.Next() {
-		var f BookFile
-		if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size); err != nil {
+		if err != nil {
 			return nil, err
 		}
-		files = append(files, f)
+		for rows.Next() {
+			var f BookFile
+			if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !seen[f.ID] {
+				seen[f.ID] = true
+				files = append(files, f)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
-	return files, rows.Err()
+	return files, nil
 }

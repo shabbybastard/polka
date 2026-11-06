@@ -3,7 +3,7 @@
 # Run:   docker run -p 12791:12791 -v polka-data:/data -v /path/to/books:/books polka
 
 # --- Frontend ---
-FROM node:22-alpine AS web
+FROM node:24-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

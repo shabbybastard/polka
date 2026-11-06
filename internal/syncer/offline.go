@@ -48,6 +48,9 @@ func (s *Syncer) MakeOffline(ctx context.Context, bookID int64) (*OfflineBook, e
 	if ext == "" {
 		ext = "fb2"
 	}
+	if !validExt(ext) {
+		return nil, fmt.Errorf("invalid book extension %q", ext)
+	}
 
 	// Book file
 	fresp, err := s.request(ctx, http.MethodGet, fmt.Sprintf("/Images/fb2/%d", bookID), nil)
@@ -63,7 +66,7 @@ func (s *Syncer) MakeOffline(ctx context.Context, bookID int64) (*OfflineBook, e
 	if err != nil {
 		return nil, err
 	}
-	size, err := io.Copy(dst, fresp.Body)
+	size, err := io.Copy(dst, io.LimitReader(fresp.Body, 1<<30))
 	dst.Close()
 	if err != nil {
 		os.Remove(path + ".part")
@@ -122,7 +125,9 @@ func (s *Syncer) RemoveOffline(ctx context.Context, bookID int64) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM offline_books WHERE id = ?`, bookID); err != nil {
 		return err
 	}
-	os.Remove(s.bookPath(bookID, b.Ext))
+	if validExt(b.Ext) {
+		os.Remove(s.bookPath(bookID, b.Ext))
+	}
 	return nil
 }
 
@@ -184,4 +189,16 @@ func (s *Syncer) OpenOffline(ctx context.Context, bookID int64) (io.ReadCloser, 
 		return nil, nil, ErrOffline
 	}
 	return f, b, nil
+}
+
+func validExt(ext string) bool {
+	if ext == "" || len(ext) > 8 {
+		return false
+	}
+	for _, r := range ext {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }

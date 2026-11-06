@@ -412,6 +412,7 @@ func escape(s string) string { return html.EscapeString(s) }
 // lowercase letters and digits from <body>) — a content fingerprint
 // resilient to changes in metadata, formatting, and encoding.
 func ContentHash(r io.Reader) (string, error) {
+	r = io.LimitReader(r, maxArchiveEntrySize)
 	dec := xml.NewDecoder(r)
 	dec.CharsetReader = charset.NewReaderLabel
 	dec.Strict = false

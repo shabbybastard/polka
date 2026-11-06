@@ -122,7 +122,11 @@ func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
 					if err := dec.DecodeElement(&b64, &t); err != nil {
 						return nil, err
 					}
-					data, err := base64.StdEncoding.DecodeString(strings.Map(dropSpace, b64))
+					cleaned := strings.Map(dropSpace, b64)
+					if len(cleaned) > 24<<20 {
+						return nil, fmt.Errorf("cover base64: too large")
+					}
+					data, err := base64.StdEncoding.DecodeString(cleaned)
 					if err != nil {
 						return nil, fmt.Errorf("cover base64: %w", err)
 					}
@@ -195,7 +199,11 @@ func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
 }
 
 func decodeBase64(b64 string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(strings.Map(dropSpace, b64))
+	cleaned := strings.Map(dropSpace, b64)
+	if len(cleaned) > 24<<20 {
+		return nil, fmt.Errorf("base64 too large")
+	}
+	return base64.StdEncoding.DecodeString(cleaned)
 }
 
 func dropSpace(r rune) rune {

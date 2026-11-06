@@ -21,6 +21,13 @@ const (
 // box and encodes it as a compact JPEG. Transparency is composited over
 // white, which is what e-ink and most EPUB readers expect.
 func NormalizeCover(data []byte) ([]byte, string, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", fmt.Errorf("cover: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 8192 || cfg.Height > 8192 {
+		return nil, "", fmt.Errorf("cover: invalid dimensions")
+	}
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, "", fmt.Errorf("cover: %w", err)

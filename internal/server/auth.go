@@ -76,12 +76,19 @@ func (s *Server) basicUser(r *http.Request, login, password string) *auth.User {
 	if s.basic.entries == nil {
 		s.basic.entries = make(map[string]basicEntry, 16)
 	}
-	if len(s.basic.entries) > 256 {
-		s.basic.entries = make(map[string]basicEntry, 16)
+	if len(s.basic.entries) >= 256 {
+		s.basic.mu.Unlock()
+		return u
 	}
 	s.basic.entries[key] = basicEntry{user: u, expires: time.Now().Add(basicCacheTTL)}
 	s.basic.mu.Unlock()
 	return u
+}
+
+func (s *Server) invalidateBasicCache() {
+	s.basic.mu.Lock()
+	s.basic.entries = make(map[string]basicEntry, 16)
+	s.basic.mu.Unlock()
 }
 
 // protected requires authentication when the server is not in public mode.
@@ -291,6 +298,9 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := s.users.UpdateUser(r.Context(), id, req.Password, req.DisplayName, req.Role, req.Disabled); err != nil {
 		s.authAdminError(w, err)
 		return
+	}
+	if req.Password != nil {
+		s.invalidateBasicCache()
 	}
 	if readerEmail != nil {
 		if err := s.setReaderEmail(r.Context(), id, *readerEmail); err != nil {

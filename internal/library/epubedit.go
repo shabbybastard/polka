@@ -45,6 +45,9 @@ func EditEPUB(data []byte, edit EPUBEdit) ([]byte, error) {
 	entries := make([]epubEntry, 0, len(zr.File))
 	byName := make(map[string]int, len(zr.File))
 	for _, f := range zr.File {
+		if !safeArchiveName(f.Name) {
+			return nil, fmt.Errorf("epub: unsafe entry name %q", f.Name)
+		}
 		if strings.EqualFold(f.Name, "META-INF/encryption.xml") {
 			return nil, fmt.Errorf("epub is encrypted")
 		}
@@ -52,7 +55,7 @@ func EditEPUB(data []byte, edit EPUBEdit) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		content, err := io.ReadAll(rc)
+		content, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 		rc.Close()
 		if err != nil {
 			return nil, err

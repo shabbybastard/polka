@@ -34,6 +34,28 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// RebuildIndexes recreates the schema indexes and rebuilds the FTS tables.
+// Used after an aborted import to avoid leaving the database unindexed.
+func (s *Store) RebuildIndexes(ctx context.Context) {
+	for _, idx := range schemaIndexes {
+		s.db.ExecContext(ctx, idx)
+	}
+	s.db.ExecContext(ctx, `DELETE FROM book_search`)
+	s.db.ExecContext(ctx, `
+		INSERT INTO book_search (rowid, title, authors, series)
+		SELECT b.id, b.title,
+		       coalesce((SELECT group_concat(trim(a.last_name || ' ' || a.first_name || ' ' || a.middle_name), ' ')
+		                 FROM book_authors ba JOIN authors a ON a.id = ba.author_id
+		                 WHERE ba.book_id = b.id), ''),
+		       coalesce(s.title, '')
+		FROM books b LEFT JOIN series s ON s.id = b.series_id
+		WHERE b.deleted = 0`)
+	s.db.ExecContext(ctx, `DELETE FROM authors_search`)
+	s.db.ExecContext(ctx, `INSERT INTO authors_search (rowid, name) SELECT id, trim(last_name || ' ' || first_name || ' ' || middle_name) FROM authors`)
+	s.db.ExecContext(ctx, `DELETE FROM series_search`)
+	s.db.ExecContext(ctx, `INSERT INTO series_search (rowid, title) SELECT id, title FROM series`)
+}
+
 func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) migrate() error {

@@ -4,6 +4,7 @@ package sqlitedrv
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -25,5 +26,7 @@ func dsn(path string, o Options) string {
 	if o.ForeignKeys {
 		p = append(p, "_pragma=foreign_keys(ON)")
 	}
-	return "file:" + path + "?" + strings.Join(p, "&")
+	u := url.URL{Scheme: "file", Path: path}
+	u.RawQuery = strings.Join(p, "&")
+	return u.String()
 }

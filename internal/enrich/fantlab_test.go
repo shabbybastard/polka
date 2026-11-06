@@ -111,6 +111,57 @@ func TestFantLabZeroRating(t *testing.T) {
 	}
 }
 
+const fantlabVonnegutSearch = `{"matches":[
+  {"work_id":1432,"rusname":"Сирены Титана","name":"The Sirens of Titan","name_eng":"novel","work_type_id":1,"work_type_name":"роман","all_autor_rusname":"Курт Воннегут","autor_rusname":"Курт Воннегут"},
+  {"work_id":1086394,"rusname":"Сирены Титана","name":"","name_eng":"shortstory","work_type_id":45,"work_type_name":"рассказ","all_autor_rusname":"Антон Соловьёв","autor_rusname":"Антон Соловьёв"}
+]}`
+
+const fantlabWork1432 = `{
+  "rating":{"rating":"8.04","true_rating":"8.17","voters":1894},
+  "val_midmark_by_weight":8.12,
+  "val_voters":1894,
+  "work_type_id":1,
+  "work_type_name":"роман"
+}`
+
+func fantlabVonnegutServer(t *testing.T, workHits *int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search-works"):
+			w.Write([]byte(fantlabVonnegutSearch))
+		case r.URL.Path == "/work/1432":
+			if workHits != nil {
+				*workHits++
+			}
+			w.Write([]byte(fantlabWork1432))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFantLabVonnegutSirens(t *testing.T) {
+	hits := 0
+	fl := fantlabVonnegutServer(t, &hits)
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.FantLabBase = fl.URL
+
+	res := p.Get(context.Background(), "fantlab-vonnegut", "Сирены Титана", "Воннегут Курт",
+		map[string]bool{SourceFantLab: true}, nil)
+	if res.Primary == nil || res.Primary.Source != SourceFantLab {
+		t.Fatalf("primary = %+v", res.Primary)
+	}
+	if !strings.Contains(res.Primary.InfoURL, "1432") {
+		t.Errorf("infoUrl = %q, want work 1432", res.Primary.InfoURL)
+	}
+	if hits != 1 {
+		t.Errorf("work endpoint hits = %d, want 1", hits)
+	}
+}
+
 func TestFantLabCacheInvalidation(t *testing.T) {
 	fl, _ := fantlabServer(t, fantlabWork4325)
 	p := newTestProvider(t, true, true, true)

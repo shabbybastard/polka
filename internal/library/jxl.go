@@ -7,6 +7,7 @@ package library
 
 import (
 	"bytes"
+	"fmt"
 	"image/jpeg"
 
 	"github.com/gen2brain/jpegxl"
@@ -24,6 +25,9 @@ func isJXL(d []byte) bool {
 
 // jxlToJPEG decodes JXL and re-encodes it as JPEG.
 func jxlToJPEG(d []byte) ([]byte, string, error) {
+	if len(d) > maxCoverSize {
+		return nil, "", fmt.Errorf("jxl: too large")
+	}
 	img, err := jpegxl.Decode(bytes.NewReader(d))
 	if err != nil {
 		return nil, "", err

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/shabbybastard/polka/internal/syncer"
@@ -45,6 +46,11 @@ func (s *Server) handleSyncConfigSave(w http.ResponseWriter, r *http.Request) {
 	req.Login = strings.TrimSpace(req.Login)
 	if req.Server == "" || req.Login == "" || req.Password == "" {
 		http.Error(w, "server, login and password are required", http.StatusBadRequest)
+		return
+	}
+	u, err := url.Parse(req.Server)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		http.Error(w, "invalid server url", http.StatusBadRequest)
 		return
 	}
 

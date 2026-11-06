@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"strings"
+	"time"
 )
 
 // User data state for syncing the desktop client with the server:
@@ -115,6 +117,13 @@ func (s *Service) ExportState(ctx context.Context, userID int64) (*SyncState, er
 // by updated_at, lists — union (create missing ones, add books).
 func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) error {
 	for _, p := range in.Progress {
+		if p.BookID <= 0 {
+			continue
+		}
+		updatedAt := p.UpdatedAt
+		if _, err := time.Parse("2006-01-02 15:04:05", updatedAt); err != nil {
+			continue
+		}
 		if _, err := s.db.ExecContext(ctx, `
 			INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, deleted, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -123,13 +132,17 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 				overall = excluded.overall, locator = excluded.locator,
 				deleted = excluded.deleted, updated_at = excluded.updated_at
 			WHERE excluded.updated_at > reading_progress.updated_at`,
-			userID, p.BookID, p.Chapter, p.Position, p.Overall, p.Locator, boolToInt(p.Deleted), p.UpdatedAt); err != nil {
+			userID, p.BookID, p.Chapter, p.Position, p.Overall, p.Locator, boolToInt(p.Deleted), updatedAt); err != nil {
 			return err
 		}
 	}
 
 	for _, r := range in.Ratings {
-		if r.Rating < 1 || r.Rating > 5 {
+		if r.BookID <= 0 || r.Rating < 1 || r.Rating > 5 {
+			continue
+		}
+		rUpdatedAt := r.UpdatedAt
+		if _, err := time.Parse("2006-01-02 15:04:05", rUpdatedAt); err != nil {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, `
@@ -138,12 +151,15 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 			ON CONFLICT (user_id, book_id) DO UPDATE SET
 				rating = excluded.rating, updated_at = excluded.updated_at
 			WHERE excluded.updated_at > book_ratings.updated_at`,
-			userID, r.BookID, r.Rating, r.UpdatedAt); err != nil {
+			userID, r.BookID, r.Rating, rUpdatedAt); err != nil {
 			return err
 		}
 	}
 
 	for _, ls := range in.Lists {
+		if strings.TrimSpace(ls.Name) == "" || len(ls.Name) > 100 {
+			continue
+		}
 		var listID int64
 		if ls.Builtin == BuiltinWishlist {
 			wl, err := s.Wishlist(ctx, userID)
@@ -163,6 +179,9 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 			}
 		}
 		for _, b := range ls.Books {
+			if b.BookID <= 0 {
+				continue
+			}
 			if _, err := s.db.ExecContext(ctx, `
 				INSERT OR IGNORE INTO list_books (list_id, book_id, added_at) VALUES (?, ?, ?)`,
 				listID, b.BookID, b.AddedAt); err != nil {

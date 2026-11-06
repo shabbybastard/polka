@@ -237,9 +237,7 @@ func (s *Server) syncCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if data, mime, err := s.sync.OfflineCover(r.Context(), id); err == nil {
-		if mime == "" {
-			mime = "image/jpeg"
-		}
+		mime = safeImageMime(mime)
 		w.Header().Set("Content-Type", mime)
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(data)
@@ -417,6 +415,7 @@ func (s *Server) syncReadImage(w http.ResponseWriter, r *http.Request) {
 	if mime == "" {
 		mime = "image/jpeg"
 	}
+	mime = safeImageMime(mime)
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(data)

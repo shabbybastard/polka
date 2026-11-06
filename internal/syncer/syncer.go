@@ -79,7 +79,9 @@ func Validate(ctx context.Context, cfg *Config) error {
 		return err
 	}
 	req.SetBasicAuth(cfg.Login, cfg.Password)
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("сервер недоступен: %w", err)
@@ -149,7 +151,7 @@ CREATE TABLE IF NOT EXISTS offline_books (
 
 func New(dataDir string, cfg Config, users *auth.Service, log *slog.Logger) (*Syncer, error) {
 	remote, err := url.Parse(strings.TrimRight(cfg.Server, "/"))
-	if err != nil || remote.Host == "" {
+	if err != nil || remote.Host == "" || (remote.Scheme != "http" && remote.Scheme != "https") {
 		return nil, fmt.Errorf("bad server url %q", cfg.Server)
 	}
 
@@ -175,7 +177,9 @@ func New(dataDir string, cfg Config, users *auth.Service, log *slog.Logger) (*Sy
 		users:  users,
 		db:     db,
 		dir:    dir,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
 		remote: remote,
 	}
 	s.lastSync.Store(time.Time{})

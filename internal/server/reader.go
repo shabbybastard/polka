@@ -200,12 +200,28 @@ func (s *Server) handleReadImage(w http.ResponseWriter, r *http.Request) {
 	if mime == "" {
 		mime = "image/jpeg"
 	}
+	mime = safeImageMime(mime)
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(data)
 }
 
 // GET/POST /api/v1/read/{id}/progress — the user's reading position.
+// safeImageMime restricts served image MIME types to a known-safe set so an
+// attacker-controlled content-type (e.g. text/html, image/svg+xml) cannot
+// cause stored XSS when the image URL is opened directly.
+func safeImageMime(m string) string {
+	m = strings.ToLower(strings.TrimSpace(m))
+	switch m {
+	case "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp":
+		if m == "image/jpg" {
+			return "image/jpeg"
+		}
+		return m
+	}
+	return "application/octet-stream"
+}
+
 func (s *Server) handleReadProgress(w http.ResponseWriter, r *http.Request) {
 	// Progress is user data: it does not need the library (sync-mode
 	// clients read proxied books without one).

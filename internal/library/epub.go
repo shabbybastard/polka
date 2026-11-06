@@ -236,7 +236,7 @@ func EPUBCover(r io.ReaderAt, size int64) ([]byte, string, error) {
 		return nil, "", err
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxArchiveEntrySize))
 	if err != nil {
 		return nil, "", err
 	}

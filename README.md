@@ -125,7 +125,7 @@ polka serve --library-dir /path/to/books
 
 ### Build from source
 
-Requires Go 1.26+ and Node 20+.
+Requires Go 1.26+ and Node 22+.
 
 ```sh
 git clone https://github.com/shabbybastard/polka
@@ -212,6 +212,7 @@ Everything has a sensible default. The most useful flags of `polka serve`:
 | `--library-dir` | — | folder with books (or inpx archives) |
 | `--auth` | `required` | `required` (accounts), `public` (open access) or `demo` (ephemeral guest sessions); the desktop app sets `desktop` internally |
 | `--telegram-token` | — | optional Telegram bot token; also `POLKA_TELEGRAM_TOKEN` |
+| `POLKA_TRUST_PROXY` | off | set to `1` when running behind a trusted reverse proxy so `X-Forwarded-For` / `X-Forwarded-Proto` are honoured for rate limiting and secure cookies |
 
 External rating/recommendation sources are configured in the web UI
 (*Manage → External ratings / Similar books*) and are **off by default**

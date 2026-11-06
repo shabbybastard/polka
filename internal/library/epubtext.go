@@ -335,7 +335,7 @@ func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) 
 		return nil, "", ErrNoFile
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxCoverSize))
 	if err != nil {
 		return nil, "", err
 	}
@@ -348,7 +348,7 @@ func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) 
 	case ".gif":
 		mime = "image/gif"
 	case ".svg":
-		mime = "image/svg+xml"
+		mime = "application/octet-stream"
 	case ".webp":
 		mime = "image/webp"
 	}

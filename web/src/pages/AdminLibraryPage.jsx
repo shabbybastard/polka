@@ -41,6 +41,8 @@ const PHASE_LABELS = () => ({
 // restored by flipping this flag instead of reverting code.
 const SHOW_COLLECTION_SOURCES = false;
 const CONVERSION_DISMISSED_KEY = "polka-conversion-dismissed";
+const GENRE_STATUS_DISMISSED_KEY = "polka-genre-status-dismissed";
+const RATING_STATUS_DISMISSED_KEY = "polka-rating-status-dismissed";
 
 const conversionSignature = (jobs) =>
   jobs?.length ? `${jobs[0].id}:${jobs[0].updatedAt ?? ""}` : "";
@@ -199,10 +201,14 @@ const AdminLibraryPage = ({ onConfigChange }) => {
   const [enrichment, setEnrichment] = useState(null);
   const [tagSources, setTagSources] = useState({ livelib: false, open_library: false });
   const [genreStatus, setGenreStatus] = useState(null);
-  const [genreStatusHidden, setGenreStatusHidden] = useState(false);
+  const [genreStatusHidden, setGenreStatusHidden] = useState(() => {
+    try { return localStorage.getItem(GENRE_STATUS_DISMISSED_KEY) === "1"; } catch { return false; }
+  });
   const genrePolling = useRef(null);
   const [ratingStatus, setRatingStatus] = useState(null);
-  const [ratingStatusHidden, setRatingStatusHidden] = useState(false);
+  const [ratingStatusHidden, setRatingStatusHidden] = useState(() => {
+    try { return localStorage.getItem(RATING_STATUS_DISMISSED_KEY) === "1"; } catch { return false; }
+  });
   const ratingPolling = useRef(null);
   const [similar, setSimilar] = useState(null);
   const [tastediveKey, setTastediveKey] = useState("");
@@ -222,6 +228,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setGenreStatus(st);
         if (st.running) {
           setGenreStatusHidden(false);
+          try { localStorage.removeItem(GENRE_STATUS_DISMISSED_KEY); } catch { /* ignore */ }
           if (!genrePolling.current) {
             genrePolling.current = setInterval(pollGenreStatus, 1000);
           }
@@ -249,6 +256,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         setRatingStatus(st);
         if (st.running) {
           setRatingStatusHidden(false);
+          try { localStorage.removeItem(RATING_STATUS_DISMISSED_KEY); } catch { /* ignore */ }
           if (!ratingPolling.current) {
             ratingPolling.current = setInterval(pollRatingStatus, 1000);
           }
@@ -314,6 +322,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
 
   const startGenreSync = (mode) => {
     setGenreStatusHidden(false);
+    try { localStorage.removeItem(GENRE_STATUS_DISMISSED_KEY); } catch { /* ignore */ }
     if (!tagSources.livelib && !tagSources.open_library) {
       alert(t("admin.genres.noSource"));
       return;
@@ -328,6 +337,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
 
   const startRatingSync = (mode) => {
     setRatingStatusHidden(false);
+    try { localStorage.removeItem(RATING_STATUS_DISMISSED_KEY); } catch { /* ignore */ }
     if (!anyRatingSource) {
       alert(t("admin.ratings.noSource"));
       return;
@@ -1023,7 +1033,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                       <button
                         type="button"
                         className="btn btn-link"
-                        onClick={() => setRatingStatusHidden(true)}
+                        onClick={() => { setRatingStatusHidden(true); try { localStorage.setItem(RATING_STATUS_DISMISSED_KEY, "1"); } catch { /* ignore */ } }}
                       >
                         {t("admin.progress.close")}
                       </button>
@@ -1121,7 +1131,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
                       <button
                         type="button"
                         className="btn btn-link"
-                        onClick={() => setGenreStatusHidden(true)}
+                        onClick={() => { setGenreStatusHidden(true); try { localStorage.setItem(GENRE_STATUS_DISMISSED_KEY, "1"); } catch { /* ignore */ } }}
                       >
                         {t("admin.progress.close")}
                       </button>

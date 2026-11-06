@@ -477,7 +477,7 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request) {
 		disposition = "inline" // view in browser (PDF etc.)
 	}
 	w.Header().Set("Content-Type", contentTypeFor(f.Ext))
-	w.Header().Set("Content-Disposition", disposition+`; filename="`+f.File+`.`+f.Ext+`"`)
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+safeFilename(f.File)+`.`+safeFilename(f.Ext)+`"`)
 	if size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
@@ -519,7 +519,7 @@ func (s *Server) handleBookZip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.`+f.Ext+`.zip"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.`+safeFilename(f.Ext)+`.zip"`)
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.Write(buf.Bytes())
 }
@@ -545,11 +545,11 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToLower(f.Ext) {
 	case "fb2":
 		w.Header().Set("Content-Type", contentTypeFor("fb2"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.compact.fb2"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.compact.fb2"`)
 		w.Write(library.StripBinaries(data))
 	case "txt":
 		w.Header().Set("Content-Type", contentTypeFor("txt"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.txt"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.txt"`)
 		w.Write(data)
 	case "epub":
 		text, err := library.EPUBPlainText(bytes.NewReader(data), int64(len(data)))
@@ -558,11 +558,28 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", contentTypeFor("txt"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+f.File+`.txt"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.txt"`)
 		w.Write([]byte(text))
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// safeFilename strips characters that could break out of a quoted
+// Content-Disposition filename (quotes, backslashes, control chars).
+func safeFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r == '"' || r == '\\' || r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	s := strings.TrimSpace(b.String())
+	if s == "" {
+		s = "book"
+	}
+	return s
 }
 
 func contentTypeFor(ext string) string {

@@ -3,6 +3,7 @@ package server
 import (
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -71,11 +72,17 @@ func (rl *rateLimiter) blocked(key string) bool {
 // clientIP extracts the caller's address, trusting X-Forwarded-For only
 // for its last hop (the reverse proxy we sit behind appends the real
 // client). Falls back to RemoteAddr.
+func trustProxyHeaders() bool {
+	return os.Getenv("POLKA_TRUST_PROXY") == "1"
+}
+
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
-			return ip
+	if trustProxyHeaders() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+				return ip
+			}
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -91,7 +98,10 @@ func requestIsSecure(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if trustProxyHeaders() {
+		return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	}
+	return false
 }
 
 // securityHeaders adds defensive response headers to every request.

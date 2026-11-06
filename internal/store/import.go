@@ -140,6 +140,7 @@ func (im *ImportSession) commitBatch() error {
 		return err
 	}
 	im.batch = 0
+	im.closeStmts()
 	return im.begin()
 }
 
@@ -240,6 +241,7 @@ func (im *ImportSession) Finish() (ImportStats, error) {
 	if err := im.tx.Commit(); err != nil {
 		return im.stats, err
 	}
+	im.closeStmts()
 
 	for _, idx := range schemaIndexes {
 		if _, err := im.s.db.ExecContext(im.ctx, idx); err != nil {
@@ -291,11 +293,24 @@ func (im *ImportSession) Finish() (ImportStats, error) {
 	return im.stats, nil
 }
 
-// Abort rolls back the uncommitted part of the import.
+// Abort rolls back the uncommitted part of the import and tries to restore
+// the indexes that NewImport dropped, so the database is not left unindexed.
 func (im *ImportSession) Abort() {
 	if im.tx != nil {
 		im.tx.Rollback()
 	}
+	im.closeStmts()
+	im.s.RebuildIndexes(im.ctx)
+}
+
+func (im *ImportSession) closeStmts() {
+	st := &im.stmts
+	for _, p := range []*sql.Stmt{st.folder, st.series, st.author, st.genre, st.keyword, st.book, st.ba, st.bg, st.bk} {
+		if p != nil {
+			p.Close()
+		}
+	}
+	st.folder, st.series, st.author, st.genre, st.keyword, st.book, st.ba, st.bg, st.bk = nil, nil, nil, nil, nil, nil, nil, nil, nil
 }
 
 func boolToInt(b bool) int {

@@ -46,8 +46,8 @@ func (s *Service) CreateGuest(ctx context.Context) (string, *User, error) {
 func (s *Service) CleanupGuests(ctx context.Context, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx, `
-		DELETE FROM users WHERE login LIKE ? AND datetime(created_at) <= datetime(?)`,
-		guestPrefix+"%", cutoff)
+		DELETE FROM users WHERE login LIKE ? AND role = ? AND datetime(created_at) <= datetime(?)`,
+		guestPrefix+"%", RoleUser, cutoff)
 	if err != nil {
 		return 0, err
 	}
