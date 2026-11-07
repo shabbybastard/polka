@@ -46,7 +46,9 @@ mobile reading app.
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
   the listed books you already have. Add your own as a JSON list of
-  "author + title". See [`collections/`](collections/README.md).
+  "author + title", or enable the built-in scraping of collections from sites
+  such as Forbes.ru (off by default, admin-enabled). See
+  [`collections/`](collections/README.md).
 - **OPDS catalog.** Connect Moon+ Reader, KOReader, FBReader, or any other
   OPDS-capable app: new books, browse by author, series and genre, your
   "reading now" shelf, and search.
@@ -176,7 +178,7 @@ cover is resized to 1600 px and stored as a compact JPEG.
 This works for bare `.epub` files; books inside ZIP/7z archives stay read-only.
 The original file is copied to `<data-dir>/epub-backups/<book-id>/` before the
 atomic replacement, and backups older than seven days are removed once a day
-at 03:00 server time.
+at 03:00 local server time.
 
 ## OPDS
 
