@@ -80,22 +80,12 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
             </Link>
           )}
           {user?.role === "admin" && (
-            <>
-              <Link
-                to="/admin/library"
-                className={`topbar__nav-link ${isActive("/admin/library") ? "is-active" : ""}`}
-              >
-                {t("nav.manage")}
-              </Link>
-              {!desktop && (
-                <Link
-                  to="/admin/users"
-                  className={`topbar__nav-link ${isActive("/admin/users") ? "is-active" : ""}`}
-                >
-                  {t("nav.users")}
-                </Link>
-              )}
-            </>
+            <Link
+              to="/admin/library"
+              className={`topbar__nav-link ${isActive("/admin/library") ? "is-active" : ""}`}
+            >
+              {t("nav.manage")}
+            </Link>
           )}
         </nav>
 

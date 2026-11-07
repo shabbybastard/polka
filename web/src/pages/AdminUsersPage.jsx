@@ -81,7 +81,7 @@ const TelegramCell = ({ user, onSave }) => {
   );
 };
 
-const AdminUsersPage = ({ me }) => {
+const AdminUsersPage = ({ me, embedded = false }) => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -183,13 +183,20 @@ const AdminUsersPage = ({ me }) => {
   };
 
   return (
-    <div className="container users-page">
-      <header className="users-page__header">
-        <h1>{t("users.title")}</h1>
+    <div className={embedded ? "users-page users-page--embedded" : "container users-page"}>
+      {embedded ? <h2 className="users-page__title">{t("users.title")}</h2> : (
+        <header className="users-page__header">
+          <h1>{t("users.title")}</h1>
+          <p className="users-page__hint">
+            {t("users.hint")}
+          </p>
+        </header>
+      )}
+      {embedded && (
         <p className="users-page__hint">
           {t("users.hint")}
         </p>
-      </header>
+      )}
 
       {loading && <div>{t("loading")}</div>}
       {error && !loading && <div className="users-page__error">{t("users.loadFail")}</div>}

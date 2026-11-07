@@ -26,6 +26,13 @@ vi.mock("../api/collections", () => ({
   syncCollectionSource: vi.fn(),
 }));
 
+vi.mock("../api/auth", () => ({
+  fetchUsers: vi.fn(),
+  createUser: vi.fn(),
+  updateUser: vi.fn(),
+  deleteUser: vi.fn(),
+}));
+
 import {
   fetchConversions,
   fetchSettings,
@@ -35,6 +42,7 @@ import {
   saveSettings,
 } from "../api/manage";
 import { fetchCollections } from "../api/collections";
+import { fetchUsers } from "../api/auth";
 
 const settings = {
   enrichment: { livelib: true, google_books: true, open_library: true },
@@ -99,6 +107,21 @@ describe("AdminLibraryPage", () => {
     expect(await screen.findByText(t("admin.convert.jobs"))).toBeInTheDocument();
   });
 
+  it("renders the users sub-tab", async () => {
+    mockBase();
+    fetchUsers.mockResolvedValue({ users: [] });
+
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage me={{ id: 1, role: "admin", login: "admin", displayName: "Admin" }} />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.users") }));
+    await waitFor(() => expect(fetchUsers).toHaveBeenCalled());
+    expect(await screen.findByRole("heading", { name: t("users.title") })).toBeInTheDocument();
+  });
+
   it("refreshes the shared config after hiding the home hero", async () => {
     fetchSettings.mockResolvedValue(settings);
     fetchConversions.mockResolvedValue({ jobs: [] });
@@ -115,6 +138,8 @@ describe("AdminLibraryPage", () => {
       </MemoryRouter>
     );
 
+    // External sources live on their own tab now.
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.sources") }));
     const livelib = await screen.findByLabelText(t("admin.tags.livelib"));
     const genresSection = screen.getByRole("heading", { name: t("admin.tags") }).closest("section");
     expect(
@@ -127,6 +152,8 @@ describe("AdminLibraryPage", () => {
       })
     );
 
+    // Home hero toggle moved to the appearance tab.
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.appearance") }));
     fireEvent.click(await screen.findByLabelText(t("admin.home.hero")));
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith({ homeHero: false }));
     await waitFor(() => expect(onConfigChange).toHaveBeenCalledTimes(1));

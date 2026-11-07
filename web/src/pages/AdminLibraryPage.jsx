@@ -1,5 +1,7 @@
 import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import AdminUsersPage from "./AdminUsersPage";
 import { Link } from "react-router-dom";
 import {
   fetchConversions,
@@ -47,7 +49,11 @@ const RATING_STATUS_DISMISSED_KEY = "polka-rating-status-dismissed";
 const conversionSignature = (jobs) =>
   jobs?.length ? `${jobs[0].id}:${jobs[0].updatedAt ?? ""}` : "";
 
-const AdminLibraryPage = ({ onConfigChange }) => {
+const AdminLibraryPage = ({ onConfigChange, me }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const VALID_TABS = ["books", "import", "collections", "sources", "users", "readers", "appearance"];
+  const tab = VALID_TABS.includes(searchParams.get("tab")) ? searchParams.get("tab") : "books";
+  const selectTab = (id) => setSearchParams(id === "books" ? {} : { tab: id }, { replace: true });
   // --- Book upload ---
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
@@ -552,6 +558,32 @@ const AdminLibraryPage = ({ onConfigChange }) => {
         </div>
       )}
 
+      <nav className="library-admin__tabs" aria-label={t("admin.tabs")}>
+        {[
+          { id: "books", label: t("admin.tab.books") },
+          { id: "import", label: t("admin.tab.import") },
+          { id: "collections", label: t("admin.tab.collections") },
+          { id: "sources", label: t("admin.tab.sources") },
+          { id: "users", label: t("admin.tab.users") },
+          { id: "readers", label: t("admin.tab.readers") },
+          { id: "appearance", label: t("admin.tab.appearance") },
+        ].map((tb) => (
+          <button
+            key={tb.id}
+            type="button"
+            className={`library-admin__tab ${tab === tb.id ? "is-active" : ""}`}
+            onClick={() => selectTab(tb.id)}
+          >
+            {tb.label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "users" && (
+        <AdminUsersPage me={me} embedded />
+      )}
+
+      {tab === "books" && (
       <section className="library-admin__section">
         <h2>{t("admin.upload")}</h2>
         <p className="library-admin__hint">
@@ -720,7 +752,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </div>
         )}
       </section>
+      )}
 
+      {tab === "appearance" && (
       <section className="library-admin__section">
         <h2>{t("admin.home")}</h2>
         <p className="library-admin__hint">{t("admin.home.hint")}</p>
@@ -729,7 +763,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           <span className="library-admin__source-name">{t("admin.home.hero")}</span>
         </label>
       </section>
+      )}
 
+      {tab === "collections" && (
       <section className="library-admin__section">
         <h2>{t("admin.collections")}</h2>
         <p className="library-admin__hint">
@@ -820,7 +856,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </ul>
         )}
       </section>
+      )}
 
+      {tab === "import" && (
       <section className="library-admin__section">
         <h2>{t("admin.import")}</h2>
         <p className="library-admin__hint">
@@ -928,7 +966,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
             </div>
           )}
       </section>
+      )}
 
+      {tab === "sources" && (
       <section className="library-admin__section">
         <h2>{t("admin.sources")}</h2>
         <p className="library-admin__hint">
@@ -1050,7 +1090,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </div>
         )}
       </section>
+      )}
 
+      {tab === "sources" && (
       <section className="library-admin__section">
         <h2>{t("admin.tags")}</h2>
         <p className="library-admin__hint">{t("admin.tags.hint")}</p>
@@ -1148,7 +1190,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </div>
         )}
       </section>
+      )}
 
+      {tab === "sources" && (
       <section className="library-admin__section">
         <h2>{t("admin.similar")}</h2>
         <p className="library-admin__hint">
@@ -1184,7 +1228,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </button>
         </div>
       </section>
+      )}
 
+      {tab === "readers" && (
       <section className="library-admin__section">
         <h2>{t("admin.opds")}</h2>
         <p className="library-admin__hint">{t("admin.opds.hint")}</p>
@@ -1204,7 +1250,9 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           <p className="library-admin__hint">{t("admin.opds.off")}</p>
         )}
       </section>
+      )}
 
+      {tab === "readers" && (
       <section className="library-admin__section">
         <h2>{t("admin.smtp")}</h2>
         <p className="library-admin__hint">{t("admin.smtp.hint")}</p>
@@ -1259,6 +1307,7 @@ const AdminLibraryPage = ({ onConfigChange }) => {
           </>
         )}
       </section>
+      )}
     </div>
   );
 };
