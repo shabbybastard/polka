@@ -113,6 +113,33 @@ func (s *Service) ExportState(ctx context.Context, userID int64) (*SyncState, er
 	return state, nil
 }
 
+// syncTimeLayouts are the timestamp formats accepted in a SyncState.
+// The first is the format the server itself writes (SQLite's strftime
+// output, optionally with fractional seconds); the second is RFC3339 as
+// used by some non-bundled clients.
+var syncTimeLayouts = []string{
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02T15:04:05.999999999Z07:00",
+}
+
+// normalizeSyncTime validates a merged timestamp and converts it to the
+// SQLite datetime format the server stores, so the last-write-wins string
+// comparison stays consistent. Everything else (garbage, empty) is dropped.
+func normalizeSyncTime(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var t time.Time
+	var err error
+	for _, l := range syncTimeLayouts {
+		if t, err = time.Parse(l, s); err == nil {
+			return t.UTC().Format("2006-01-02 15:04:05.000")
+		}
+	}
+	return ""
+}
+
 // MergeState merges foreign state: progress and ratings — last-write-wins
 // by updated_at, lists — union (create missing ones, add books).
 func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) error {
@@ -120,8 +147,8 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 		if p.BookID <= 0 {
 			continue
 		}
-		updatedAt := p.UpdatedAt
-		if _, err := time.Parse("2006-01-02 15:04:05", updatedAt); err != nil {
+		updatedAt := normalizeSyncTime(p.UpdatedAt)
+		if updatedAt == "" {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, `
@@ -141,8 +168,8 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 		if r.BookID <= 0 || r.Rating < 1 || r.Rating > 5 {
 			continue
 		}
-		rUpdatedAt := r.UpdatedAt
-		if _, err := time.Parse("2006-01-02 15:04:05", rUpdatedAt); err != nil {
+		rUpdatedAt := normalizeSyncTime(r.UpdatedAt)
+		if rUpdatedAt == "" {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, `
@@ -157,7 +184,10 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 	}
 
 	for _, ls := range in.Lists {
-		if strings.TrimSpace(ls.Name) == "" || len(ls.Name) > 100 {
+		// Same validation as CreateList: an empty (whitespace-only) name is
+		// the only rejection. Any stricter cap here would drop legitimate
+		// lists on merge, since the UI itself has no length limit.
+		if strings.TrimSpace(ls.Name) == "" {
 			continue
 		}
 		var listID int64

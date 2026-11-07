@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/shabbybastard/polka/internal/auth"
 	"github.com/shabbybastard/polka/internal/config"
@@ -171,5 +173,73 @@ func TestAuthFlow(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("after logout -> %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestBasicAuthCacheRoleInvalidation(t *testing.T) {
+	ts := newAuthServer(t)
+	jar, _ := cookiejar.New(nil)
+	admin := &http.Client{Jar: jar}
+	if resp := postJSON(t, admin, ts.URL+"/auth/login", map[string]string{"login": "admin", "password": "secret123"}); resp.StatusCode != 200 {
+		t.Fatalf("login -> %d", resp.StatusCode)
+	}
+
+	// A second administrator to demote.
+	if resp := postJSON(t, admin, ts.URL+"/admin/users",
+		map[string]string{"login": "aide", "password": "aidepass1", "role": "admin"}); resp.StatusCode != 200 {
+		t.Fatalf("create aide -> %d", resp.StatusCode)
+	}
+
+	// Warm the Basic-auth cache: an admin request authenticates.
+	basic := func(client *http.Client, login, password string) int {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/users", nil)
+		req.SetBasicAuth(login, password)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	plain := &http.Client{Timeout: 5 * time.Second}
+	if code := basic(plain, "aide", "aidepass1"); code != 200 {
+		t.Fatalf("basic auth as admin -> %d, want 200", code)
+	}
+
+	// Demote the aide through the admin HTTP handler.
+	var aideID float64
+	resp, err := admin.Get(ts.URL + "/admin/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Users []struct {
+			ID    float64 `json:"id"`
+			Login string  `json:"login"`
+			Role  string  `json:"role"`
+		} `json:"users"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	for _, u := range list.Users {
+		if u.Login == "aide" {
+			aideID = u.ID
+		}
+	}
+	if aideID == 0 {
+		t.Fatal("aide not found in the users list")
+	}
+
+	// Demote aide (role user). The Basic cache re-reads the account on every
+	// hit, so admin access must be gone immediately, without waiting for
+	// the cache TTL.
+	target := fmt.Sprintf("/admin/users/%d", int64(aideID))
+	if resp := postJSON(t, admin, ts.URL+target, map[string]string{"role": "user"}); resp.StatusCode != 200 {
+		t.Fatalf("demote -> %d", resp.StatusCode)
+	}
+	if code := basic(plain, "aide", "aidepass1"); code == 200 {
+		t.Error("demoted administrator still authenticates via cached Basic credentials")
 	}
 }

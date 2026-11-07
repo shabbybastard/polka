@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -479,6 +480,11 @@ func ExtractBinary(r io.Reader, id string) ([]byte, string, error) {
 			return nil, "", err
 		}
 		data, err := decodeBase64(b64)
+		if errors.Is(err, ErrBinaryTooLarge) {
+			// The image is beyond the size bound; the book itself is still
+			// readable, so treat it as missing rather than failing the request.
+			continue
+		}
 		if err != nil {
 			return nil, "", err
 		}

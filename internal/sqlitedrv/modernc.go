@@ -4,7 +4,6 @@ package sqlitedrv
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -26,7 +25,21 @@ func dsn(path string, o Options) string {
 	if o.ForeignKeys {
 		p = append(p, "_pragma=foreign_keys(ON)")
 	}
-	u := url.URL{Scheme: "file", Path: path}
-	u.RawQuery = strings.Join(p, "&")
-	return u.String()
+	// Build a "file:" URI. Only the characters that SQLite's URI parser
+	// treats specially must be percent-escaped; a Windows drive-letter path
+	// or a UNC path must keep its original form (backslashes and all) for
+	// the parser to accept it. Building the URI via url.URL is wrong here:
+	// it would move a Windows path into the URI authority
+	// ("file://C:%5CUsers%5C..."), which SQLite rejects.
+	return "file:" + escapeDSNPath(path) + "?" + strings.Join(p, "&")
+}
+
+// escapeDSNPath percent-encodes characters that would otherwise terminate
+// the path part of a SQLite URI. '%' is escaped first so an existing name
+// with hex-looking text round-trips through the parser's %XX decoding.
+func escapeDSNPath(p string) string {
+	p = strings.ReplaceAll(p, "%", "%25")
+	p = strings.ReplaceAll(p, "?", "%3F")
+	p = strings.ReplaceAll(p, "#", "%23")
+	return p
 }

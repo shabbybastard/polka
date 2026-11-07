@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +166,59 @@ func TestSyncStateSubSecondOrdering(t *testing.T) {
 	r2, _ := s.ExportState(ctx, u.ID)
 	if !(r2.Ratings[0].UpdatedAt > r1.Ratings[0].UpdatedAt) {
 		t.Errorf("rating timestamps must grow: %q then %q", r1.Ratings[0].UpdatedAt, r2.Ratings[0].UpdatedAt)
+	}
+}
+
+func TestSyncStateMergeTimestampFormats(t *testing.T) {
+	s := newService(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "owner", "pass1234", "", RoleAdmin)
+
+	// A non-bundled client merging in RFC3339 must not lose its data.
+	in := &SyncState{
+		Progress: []ProgressState{{BookID: 10, Chapter: 3, UpdatedAt: "2099-01-01T00:00:00Z"}},
+		Ratings:  []RatingState{{BookID: 10, Rating: 5, UpdatedAt: "2099-01-01T00:00:00+03:00"}},
+		Lists: []ListState{
+			{Name: strings.Repeat("длинный", 30), Books: []ListBookState{}}, // > 100 runes: still merged
+			{Name: "   ", Books: []ListBookState{}},                         // blank: skipped
+		},
+	}
+	if err := s.MergeState(ctx, u.ID, in); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.GetProgress(ctx, u.ID, 10); err != nil || p.Chapter != 3 {
+		t.Errorf("rfc3339 progress: %+v, %v", p, err)
+	}
+	var rating int
+	if err := s.db.QueryRow(`SELECT rating FROM book_ratings WHERE user_id = ? AND book_id = ?`, u.ID, 10).Scan(&rating); err != nil {
+		t.Fatalf("rfc3339 rating: %v", err)
+	} else if rating != 5 {
+		t.Errorf("rating = %d", rating)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM lists WHERE user_id = ?`, u.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	// One wishlist is created lazily on demand; only the named list must appear.
+	if count != 1 {
+		t.Errorf("lists = %d, want 1", count)
+	}
+
+	// Garbage timestamps are dropped, not merged into the tables.
+	bad := &SyncState{
+		Progress: []ProgressState{{BookID: 11, Chapter: 1, UpdatedAt: "not-a-time"}},
+		Ratings:  []RatingState{{BookID: 11, Rating: 4, UpdatedAt: "2024-13-01 00:00:00"}},
+	}
+	if err := s.MergeState(ctx, u.ID, bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetProgress(ctx, u.ID, 11); err == nil {
+		t.Error("progress with a garbage timestamp must be skipped")
+	}
+	var bookRatings int
+	if err := s.db.QueryRow(`SELECT count(*) FROM book_ratings WHERE user_id = ? AND book_id = ?`, u.ID, 11).Scan(&bookRatings); err != nil {
+		t.Fatal(err)
+	} else if bookRatings != 0 {
+		t.Errorf("rating with a garbage timestamp must be skipped, got %d", bookRatings)
 	}
 }

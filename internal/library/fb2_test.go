@@ -2,6 +2,7 @@ package library
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -69,6 +70,50 @@ func TestParseFB2Cover(t *testing.T) {
 	}
 	if meta.CoverMime != "image/png" {
 		t.Errorf("cover mime = %q", meta.CoverMime)
+	}
+}
+
+func TestParseFB2OversizedCoverSkipped(t *testing.T) {
+	// A cover far beyond maxBinaryB64 must not fail the whole parse:
+	// the book keeps its metadata, simply without the cover image.
+	oversized := `<?xml version="1.0" encoding="UTF-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<description><title-info>
+  <book-title>Тестовая книга</book-title>
+  <coverpage><image l:href="#cover.png"/></coverpage>
+</title-info></description>
+<body><section><p>Текст книги.</p></section></body>
+<binary id="cover.png" content-type="image/png">` + strings.Repeat("A", maxBinaryB64+1) + `</binary>
+<binary id="normal.png" content-type="image/png">` + tinyPNG + `</binary>
+</FictionBook>`
+
+	meta, err := ParseFB2(strings.NewReader(oversized), true)
+	if err != nil {
+		t.Fatalf("oversized binary must be skipped, got: %v", err)
+	}
+	if meta.Title == "" {
+		t.Error("metadata must survive the skipped cover")
+	}
+	if len(meta.Cover) != 0 {
+		t.Error("oversized cover must not be decoded")
+	}
+}
+
+func TestExtractBinaryOversizedMissing(t *testing.T) {
+	oversized := `<?xml version="1.0"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<binary id="big.png" content-type="image/png">` + strings.Repeat("A", maxBinaryB64+1) + `</binary>
+<binary id="small.png" content-type="image/png">` + tinyPNG + `</binary>
+</FictionBook>`
+
+	if data, _, err := ExtractBinary(strings.NewReader(oversized), "small.png"); err != nil || len(data) == 0 {
+		t.Fatalf("small binary: %v", err)
+	}
+	if _, _, err := ExtractBinary(strings.NewReader(oversized), "big.png"); err == nil {
+		t.Fatal("oversized binary must be treated as missing")
+	}
+	if _, _, err := ExtractBinary(strings.NewReader(oversized), "big.png"); err != nil && !errors.Is(err, ErrNoFile) {
+		t.Fatalf("oversized binary: %v", err)
 	}
 }
 

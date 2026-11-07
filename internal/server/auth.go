@@ -300,6 +300,8 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Password != nil {
+		// A password change invalidates the cached Basic credentials:
+		// the cached user must not outlive its password.
 		s.invalidateBasicCache()
 	}
 	if readerEmail != nil {

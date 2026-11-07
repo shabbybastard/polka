@@ -3,6 +3,7 @@ package library
 import (
 	"encoding/base64"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -12,6 +13,14 @@ import (
 
 	"golang.org/x/net/html/charset"
 )
+
+// maxBinaryB64 bounds the base64 of a single <binary> element (a cover or a
+// reader image): 24 MB of base64 is ~18 MB decoded, far beyond any book
+// illustration in practice.
+const maxBinaryB64 = 24 << 20
+
+// ErrBinaryTooLarge reports a <binary> element over maxBinaryB64.
+var ErrBinaryTooLarge = errors.New("base64 too large")
 
 // FB2Meta holds book metadata from an FB2 file.
 type FB2Meta struct {
@@ -124,8 +133,11 @@ func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
 						return nil, err
 					}
 					cleaned := strings.Map(dropSpace, b64)
-					if len(cleaned) > 24<<20 {
-						return nil, fmt.Errorf("cover base64: too large")
+					if len(cleaned) > maxBinaryB64 {
+						// An oversized cover is unusual but the book itself is
+						// legitimate: skip the image instead of failing the
+						// whole parse.
+						return meta, nil
 					}
 					data, err := base64.StdEncoding.DecodeString(cleaned)
 					if err != nil {
@@ -201,8 +213,8 @@ func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
 
 func decodeBase64(b64 string) ([]byte, error) {
 	cleaned := strings.Map(dropSpace, b64)
-	if len(cleaned) > 24<<20 {
-		return nil, fmt.Errorf("base64 too large")
+	if len(cleaned) > maxBinaryB64 {
+		return nil, ErrBinaryTooLarge
 	}
 	return base64.StdEncoding.DecodeString(cleaned)
 }
