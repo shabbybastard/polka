@@ -167,10 +167,20 @@ jobs:
     needs: [binaries, packages, docker]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      # Only downloadable release artifacts. The docker job also uploads a
+      # BuildKit build-record artifact (".dockerbuild") that is not a valid
+      # zip for actions/download-artifact and used to break this job.
+      - name: Download binaries
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: bin-*
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          name: packages
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
