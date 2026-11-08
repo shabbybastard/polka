@@ -24,16 +24,6 @@ CREATE TABLE IF NOT EXISTS reading_progress (
 CREATE INDEX IF NOT EXISTS idx_progress_updated ON reading_progress (user_id, updated_at);
 `
 
-// migrateProgress upgrades the table from early builds: adds the overall
-// column; if it already exists, ALTER fails with duplicate column — ignored.
-func migrateProgress(db *sql.DB) {
-	db.Exec(`ALTER TABLE reading_progress ADD COLUMN overall REAL NOT NULL DEFAULT 0`)
-	db.Exec(`ALTER TABLE reading_progress ADD COLUMN locator TEXT NOT NULL DEFAULT ''`)
-	// deleted is a tombstone: a removed position must still be exported
-	// and merged, otherwise another device would restore the old progress.
-	db.Exec(`ALTER TABLE reading_progress ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
-}
-
 type Progress struct {
 	BookID   int64
 	Chapter  int

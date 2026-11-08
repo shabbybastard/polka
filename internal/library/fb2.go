@@ -22,6 +22,41 @@ const maxBinaryB64 = 24 << 20
 // ErrBinaryTooLarge reports a <binary> element over maxBinaryB64.
 var ErrBinaryTooLarge = errors.New("base64 too large")
 
+// MaxBinaryB64 is the exported bound used by the FB2-to-EPUB converter.
+const MaxBinaryB64 = maxBinaryB64
+
+// ReadElementTextLimited reads the text content of an XML element without
+// first buffering it into an unbounded string. The old
+// xml.Decoder.DecodeElement approach allocated the whole element before the
+// size check, so a single oversized <binary> could exhaust memory.
+func ReadElementTextLimited(dec *xml.Decoder, start xml.StartElement, max int) (string, error) {
+	var b strings.Builder
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		switch t := tok.(type) {
+		case xml.CharData:
+			if b.Len()+len(t) > max {
+				return "", ErrBinaryTooLarge
+			}
+			b.Write(t)
+		case xml.StartElement:
+			depth++
+			if depth > 8 {
+				return "", fmt.Errorf("xml element nested too deeply")
+			}
+		case xml.EndElement:
+			if depth == 0 {
+				return b.String(), nil
+			}
+			depth--
+		}
+	}
+}
+
 // FB2Meta holds book metadata from an FB2 file.
 type FB2Meta struct {
 	Title          string
@@ -128,17 +163,17 @@ func ParseFB2(r io.Reader, withCover bool) (*FB2Meta, error) {
 				take := coverID != "" && id == coverID ||
 					coverID == "" && strings.HasPrefix(ctype, "image/")
 				if withCover && take {
-					var b64 string
-					if err := dec.DecodeElement(&b64, &t); err != nil {
-						return nil, err
-					}
-					cleaned := strings.Map(dropSpace, b64)
-					if len(cleaned) > maxBinaryB64 {
+					b64, err := ReadElementTextLimited(dec, t, maxBinaryB64)
+					if errors.Is(err, ErrBinaryTooLarge) {
 						// An oversized cover is unusual but the book itself is
 						// legitimate: skip the image instead of failing the
 						// whole parse.
 						return meta, nil
 					}
+					if err != nil {
+						return nil, err
+					}
+					cleaned := strings.Map(dropSpace, b64)
 					data, err := base64.StdEncoding.DecodeString(cleaned)
 					if err != nil {
 						return nil, fmt.Errorf("cover base64: %w", err)

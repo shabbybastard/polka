@@ -24,6 +24,9 @@ const request = async (path, init = {}) => {
     ...init,
   });
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("polka-unauthorized"));
+    }
     const err = new Error(`Request failed: ${res.status} ${path}`);
     err.status = res.status;
     throw err;
@@ -50,6 +53,15 @@ export const api = {
     return res.text();
   },
 
+  async postJson(path, body) {
+    const res = await request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    return res.json();
+  },
+
   coverUrl(bookId, version) {
     const url = buildUrl(`Images/covers/${bookId}`);
     return version ? `${url}?v=${encodeURIComponent(version)}` : url;
@@ -57,10 +69,6 @@ export const api = {
 
   fb2Url(bookId) {
     return buildUrl(`Images/fb2/${bookId}`);
-  },
-
-  zipUrl(bookId) {
-    return buildUrl(`Images/zip/${bookId}`);
   },
 
   fb2CompactUrl(bookId) {

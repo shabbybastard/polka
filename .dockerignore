@@ -1,8 +1,16 @@
 .git
 .github
 .idea
+.ideas
+.audit
 bin
 dist
+books
+data
+*.db
+*.db-wal
+*.db-shm
+secret.key
 web/node_modules
 web/dist
 packaging

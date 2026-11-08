@@ -146,4 +146,7 @@ func TestMatchBook(t *testing.T) {
 	if _, err := st.MatchBook(ctx, "Нет такой книги", ""); err == nil {
 		t.Error("missing title must not match")
 	}
+	if _, err := st.MatchBook(ctx, "Жанровый хит", "   "); err != nil {
+		t.Errorf("whitespace-only author must not panic: %v", err)
+	}
 }

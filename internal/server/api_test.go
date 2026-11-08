@@ -202,16 +202,25 @@ func TestAPIEndToEnd(t *testing.T) {
 		t.Errorf("fb2 download: %d %s", resp.StatusCode, resp.Header.Get("Content-Disposition"))
 	}
 
-	// zip and compact
-	for _, path := range []string{"/Images/zip/", "/Images/fb2compact/"} {
-		resp, err = http.Get(ts.URL + path + itoa64(bookID))
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			t.Errorf("%s -> %d", path, resp.StatusCode)
-		}
+	// compact download
+	resp, err = http.Get(ts.URL + "/Images/fb2compact/" + itoa64(bookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("fb2compact -> %d", resp.StatusCode)
+	}
+
+	// The per-book ZIP export was removed; the old URL must not fall back to
+	// the SPA index.html.
+	resp, err = http.Get(ts.URL + "/Images/zip/" + itoa64(bookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("removed zip download -> %d, want 404", resp.StatusCode)
 	}
 
 	// Nonexistent book

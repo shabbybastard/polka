@@ -65,7 +65,10 @@ type coverEntry struct {
 	mime string
 }
 
-const coverCacheSize = 512
+const (
+	coverCacheSize     = 128
+	maxCachedCoverSize = 2 << 20
+)
 
 func New(root string) *Library {
 	if root == "" {
@@ -145,7 +148,7 @@ func (l *Library) Open(folder, file, ext string) (io.ReadCloser, int64, error) {
 		rc, size, err := openFromArchive(ap, name)
 		if err == nil {
 			if strings.EqualFold(ext, "epub") {
-				return unwrapEPUB(rc) // Flibusta dumps pack epub as 7z
+				return unwrapEPUB(rc, size) // Flibusta dumps pack epub as 7z
 			}
 			return rc, size, nil
 		}
@@ -154,24 +157,100 @@ func (l *Library) Open(folder, file, ext string) (io.ReadCloser, int64, error) {
 	return nil, 0, fmt.Errorf("%w: %q — %s", ErrNoFile, name, strings.Join(tried, "; "))
 }
 
+// EntrySize returns the uncompressed size of a book entry without reading
+// its data. It lets callers reject an oversized attachment before the EPUB
+// unwrap path buffers a 7z-packed book.
+func (l *Library) EntrySize(folder, file, ext string) (int64, error) {
+	name := file + "." + ext
+	if !pathInside(l.root, folder) || strings.ContainsAny(name, `/\`) {
+		return 0, fmt.Errorf("%w: %s/%s", ErrNoFile, folder, name)
+	}
+	path := filepath.Join(l.root, filepath.FromSlash(folder))
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		fi, err := os.Stat(filepath.Join(path, name))
+		if err != nil {
+			return 0, fmt.Errorf("%w: %s/%s", ErrNoFile, folder, name)
+		}
+		return fi.Size(), nil
+	}
+	var tried []string
+	for _, ap := range archiveCandidates(path) {
+		size, err := archiveEntrySize(ap, name)
+		if err == nil {
+			return size, nil
+		}
+		tried = append(tried, filepath.Base(ap)+": "+err.Error())
+	}
+	return 0, fmt.Errorf("%w: %q — %s", ErrNoFile, name, strings.Join(tried, "; "))
+}
+
+func archiveEntrySize(path, name string) (int64, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, fmt.Errorf("not on disk")
+	}
+	stem := entryStem(name)
+	if strings.EqualFold(filepath.Ext(path), ".7z") {
+		zr, err := sevenzip.OpenReader(path)
+		if err != nil {
+			return 0, fmt.Errorf("not a valid 7z: %v", err)
+		}
+		defer zr.Close()
+		for _, entry := range zr.File {
+			if strings.EqualFold(entry.Name, name) || strings.EqualFold(entry.Name, stem) {
+				return int64(entry.UncompressedSize), nil
+			}
+		}
+		return 0, fmt.Errorf("entry %q not found", name)
+	}
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return 0, fmt.Errorf("not a valid zip: %v", err)
+	}
+	defer zr.Close()
+	for _, entry := range zr.File {
+		if strings.EqualFold(entry.Name, name) || strings.EqualFold(entry.Name, stem) {
+			return int64(entry.UncompressedSize64), nil
+		}
+	}
+	return 0, fmt.Errorf("entry %q not found", name)
+}
+
 // unwrapEPUB normalizes an epub: in Flibusta dumps the .epub file is itself
 // a 7z archive (the epub files live under a subfolder). We repack it into a
 // regular zip-epub so everything downstream (reading, cover, download) works
 // like a normal epub. A regular zip-epub is returned as is.
-func unwrapEPUB(rc io.ReadCloser) (io.ReadCloser, int64, error) {
-	data, err := readLimited(rc, maxArchiveEntrySize)
-	rc.Close()
-	if err != nil {
+type prefixReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (p *prefixReadCloser) Close() error { return p.closer.Close() }
+
+func unwrapEPUB(rc io.ReadCloser, size int64) (io.ReadCloser, int64, error) {
+	header := make([]byte, 6)
+	n, err := io.ReadFull(rc, header)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		rc.Close()
 		return nil, 0, err
 	}
-	if len(data) >= 6 && data[0] == 0x37 && data[1] == 0x7A && data[2] == 0xBC && data[3] == 0xAF {
+	// A normal zip-epub is returned without buffering the whole file. Only
+	// the Flibusta 7z-wrapped variant needs a full read and repack.
+	if n >= 4 && header[0] == 0x37 && header[1] == 0x7A && header[2] == 0xBC && header[3] == 0xAF {
+		data, err := readLimited(io.MultiReader(bytes.NewReader(header[:n]), rc), maxArchiveEntrySize)
+		rc.Close()
+		if err != nil {
+			return nil, 0, err
+		}
 		repacked, err := sevenZToEpub(data)
 		if err != nil {
 			return nil, 0, fmt.Errorf("unwrap epub 7z: %w", err)
 		}
-		data = repacked
+		return io.NopCloser(bytes.NewReader(repacked)), int64(len(repacked)), nil
 	}
-	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+	return &prefixReadCloser{
+		Reader: io.MultiReader(bytes.NewReader(header[:n]), rc),
+		closer: rc,
+	}, size, nil
 }
 
 // sevenZToEpub repacks a 7z-packed epub into a standard zip-epub, stripping
@@ -464,6 +543,14 @@ func (l *Library) ForgetCover(bookID int64) {
 	l.covers.Remove(bookID)
 }
 
+// ForgetAllCovers drops the whole cover cache after a catalog replace.
+func (l *Library) ForgetAllCovers() {
+	if l == nil {
+		return
+	}
+	l.covers.Purge()
+}
+
 func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string, error) {
 	if c, ok := l.covers.Get(bookID); ok {
 		if c.data == nil {
@@ -474,7 +561,16 @@ func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string,
 
 	data, mime, err := l.extractCover(folder, file, ext)
 
-	l.covers.Add(bookID, coverEntry{data: data, mime: mime})
+	if err == nil {
+		// Do not let a few huge covers dominate the LRU's memory budget.
+		if len(data) <= maxCachedCoverSize {
+			l.covers.Add(bookID, coverEntry{data: data, mime: mime})
+		}
+	} else if errors.Is(err, ErrNoFile) {
+		// Negative cache only for a genuinely missing cover; transient I/O
+		// errors must be retried on the next request.
+		l.covers.Add(bookID, coverEntry{})
+	}
 
 	if err != nil {
 		return nil, "", err

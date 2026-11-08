@@ -188,9 +188,8 @@ func Slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = slugRe.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
-	if len(s) > 64 {
-		s = s[:64]
-		s = strings.Trim(s, "-")
+	if runes := []rune(s); len(runes) > 64 {
+		s = strings.Trim(string(runes[:64]), "-")
 	}
 	return s
 }
@@ -547,6 +546,14 @@ type MatchStats struct {
 	Matched int
 }
 
+// ResetMatches drops every cached book_id. Called after a catalog replace so
+// stale ids can never point at different books; the normal rematch rebuilds
+// them immediately afterwards.
+func (s *Service) ResetMatches(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE collection_items SET book_id = 0, match_kind = ''`)
+	return err
+}
+
 // Match recomputes the matching of a collection against the library.
 func (s *Service) Match(ctx context.Context, m Matcher, slug string) (*MatchStats, error) {
 	c, err := s.Get(ctx, slug)
@@ -567,6 +574,10 @@ func (s *Service) Match(ctx context.Context, m Matcher, slug string) (*MatchStat
 		if b, k, err := m.MatchBookExt(ctx, it.Title, it.Author, it.ISBN); err == nil {
 			bookID, kind = b.ID, k
 			st.Matched++
+		} else if !errors.Is(err, store.ErrNotFound) {
+			// A transient database error must not be mistaken for "not in the
+			// library" and erase an already matched book_id.
+			return st, err
 		}
 		if bookID != it.BookID || kind != it.MatchKind {
 			if _, err := s.db.ExecContext(ctx,

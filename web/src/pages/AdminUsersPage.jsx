@@ -7,6 +7,7 @@ const emptyForm = { login: "", password: "", displayName: "", role: "user", tele
 
 const ReaderEmailCell = ({ user, onSave }) => {
   const [value, setValue] = useState(user.readerEmail ?? "");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setValue(user.readerEmail ?? "");
@@ -14,8 +15,11 @@ const ReaderEmailCell = ({ user, onSave }) => {
 
   const commit = () => {
     const next = value.trim();
-    if (next === (user.readerEmail ?? "")) return;
-    onSave(user, next).catch(() => setValue(user.readerEmail ?? ""));
+    if (saving || next === (user.readerEmail ?? "")) return;
+    setSaving(true);
+    onSave(user, next)
+      .catch(() => setValue(user.readerEmail ?? ""))
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -25,6 +29,7 @@ const ReaderEmailCell = ({ user, onSave }) => {
       aria-label={t("users.readerEmail")}
       placeholder={t("users.readerEmailPh")}
       value={value}
+      disabled={saving}
       autoComplete="off"
       spellCheck={false}
       onChange={(e) => setValue(e.target.value)}
@@ -41,6 +46,7 @@ const ReaderEmailCell = ({ user, onSave }) => {
 
 const TelegramCell = ({ user, onSave }) => {
   const [value, setValue] = useState(user.telegramId ? String(user.telegramId) : "");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setValue(user.telegramId ? String(user.telegramId) : "");
@@ -48,15 +54,16 @@ const TelegramCell = ({ user, onSave }) => {
 
   const commit = () => {
     const next = value.trim();
-    if (next === (user.telegramId ? String(user.telegramId) : "")) return;
+    if (saving || next === (user.telegramId ? String(user.telegramId) : "")) return;
     if (next !== "" && !/^\d{1,20}$/.test(next)) {
       alert(t("users.telegramInvalid"));
       setValue(user.telegramId ? String(user.telegramId) : "");
       return;
     }
-    onSave(user, next === "" ? 0 : Number(next)).catch(() =>
-      setValue(user.telegramId ? String(user.telegramId) : "")
-    );
+    setSaving(true);
+    onSave(user, next === "" ? 0 : Number(next))
+      .catch(() => setValue(user.telegramId ? String(user.telegramId) : ""))
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -67,6 +74,7 @@ const TelegramCell = ({ user, onSave }) => {
       aria-label={t("users.telegramId")}
       placeholder={t("users.telegramIdPh")}
       value={value}
+      disabled={saving}
       autoComplete="off"
       spellCheck={false}
       onChange={(e) => setValue(e.target.value)}
@@ -89,8 +97,12 @@ const AdminUsersPage = ({ me, embedded = false }) => {
   const [busy, setBusy] = useState(false);
 
   const reload = () => {
+    setError(null);
     fetchUsers()
-      .then((res) => setUsers(res.users ?? []))
+      .then((res) => {
+        setUsers(res.users ?? []);
+        setError(null);
+      })
       .catch((err) => setError(err))
       .finally(() => setLoading(false));
   };
@@ -104,11 +116,10 @@ const AdminUsersPage = ({ me, embedded = false }) => {
       else if (message.includes("admin")) alert(t("users.lastAdmin"));
       else alert(t("users.loginTaken"));
     } else if (err.status === 400) {
-      alert(
-        String(err.message).includes("telegram")
-          ? t("users.telegramInvalid")
-          : t("users.emailInvalid")
-      );
+      const message = String(err.message).toLowerCase();
+      if (message.includes("telegram")) alert(t("users.telegramInvalid"));
+      else if (message.includes("email")) alert(t("users.emailInvalid"));
+      else alert(t("users.opFail"));
     } else {
       alert(t("users.opFail"));
     }
@@ -199,9 +210,16 @@ const AdminUsersPage = ({ me, embedded = false }) => {
       )}
 
       {loading && <div>{t("loading")}</div>}
-      {error && !loading && <div className="users-page__error">{t("users.loadFail")}</div>}
+      {error && !loading && (
+        <div className="users-page__error">
+          {t("users.loadFail")}{" "}
+          <button type="button" className="btn btn-link" onClick={reload}>
+            {t("users.retry")}
+          </button>
+        </div>
+      )}
 
-      {!loading && !error && (
+      {!loading && (
         <div className="users-table-wrap">
         <table className="users-table">
           <thead>

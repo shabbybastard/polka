@@ -33,17 +33,29 @@ type SimilarConfig struct {
 type similarEntry struct {
 	Results   []SimilarBook `json:"results"`
 	FetchedAt time.Time     `json:"fetchedAt"`
+	Partial   bool          `json:"partial,omitempty"`
+}
+
+func similarConfigKey(cfg SimilarConfig) string {
+	return fmt.Sprintf("f=%t;t=%t;k=%s", cfg.FantLab, cfg.TasteDive, cfg.TasteDiveKey)
 }
 
 // Similar returns similar books from the enabled sources (cached).
 func (p *Provider) Similar(ctx context.Context, key, title, author string, cfg SimilarConfig) []SimilarBook {
+	key += "|" + similarConfigKey(cfg)
 	p.mu.Lock()
 	if p.similar == nil {
 		p.loadSimilarCache()
 	}
-	if e, ok := p.similar[key]; ok && time.Since(e.FetchedAt) < successTTL {
-		p.mu.Unlock()
-		return e.Results
+	if e, ok := p.similar[key]; ok {
+		ttl := successTTL
+		if e.Partial {
+			ttl = transientTTL
+		}
+		if time.Since(e.FetchedAt) < ttl {
+			p.mu.Unlock()
+			return e.Results
+		}
 	}
 	p.mu.Unlock()
 
@@ -71,7 +83,20 @@ func (p *Provider) Similar(ctx context.Context, key, title, author string, cfg S
 		return out // network failures are not cached
 	}
 	p.mu.Lock()
-	p.similar[key] = similarEntry{Results: out, FetchedAt: time.Now()}
+	for len(p.similar) >= maxSimilarEntries {
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range p.similar {
+			if oldestKey == "" || v.FetchedAt.Before(oldest) {
+				oldestKey, oldest = k, v.FetchedAt
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(p.similar, oldestKey)
+	}
+	p.similar[key] = similarEntry{Results: out, FetchedAt: time.Now(), Partial: transient}
 	p.persistSimilarCache()
 	p.mu.Unlock()
 	return out
@@ -89,6 +114,16 @@ func (p *Provider) loadSimilarCache() {
 }
 
 func (p *Provider) persistSimilarCache() {
+	p.similarPersistCount++
+	if p.similarPersistCount%persistEvery != 0 && time.Since(p.lastSimilarPersist) < persistMinGap {
+		return
+	}
+	p.writeSimilarCacheLocked()
+	p.lastSimilarPersist = time.Now()
+}
+
+// writeSimilarCacheLocked performs the actual JSON rewrite. The caller holds p.mu.
+func (p *Provider) writeSimilarCacheLocked() {
 	data, err := json.Marshal(p.similar)
 	if err != nil {
 		return
@@ -133,8 +168,8 @@ func (p *Provider) fantlabSimilar(ctx context.Context, title, author string) ([]
 
 	// Prefer an author match (the last name occurs in the FantLab author name).
 	pick := search.Matches[0]
-	if author != "" {
-		last := strings.Fields(author)[0]
+	if fields := strings.Fields(author); len(fields) > 0 {
+		last := fields[0]
 		for _, m := range search.Matches {
 			if strings.Contains(strings.ToLower(m.AllRus+m.AutorRus), strings.ToLower(last)) {
 				pick = m

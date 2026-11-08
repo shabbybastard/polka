@@ -46,10 +46,50 @@ type Bot struct {
 	backend Backend
 	log     *slog.Logger
 
-	mu       sync.Mutex
-	sessions map[int64]*session
-	uploads  map[int64][]time.Time
-	menus    map[int64][]int64 // bot messages that contain inline menus
+	mu        sync.Mutex
+	sessions  map[int64]*session
+	uploads   map[int64][]time.Time
+	menus     map[int64][]int64 // bot messages that contain inline menus
+	lastSeen  map[int64]time.Time
+	chatLocks chatLockTable // per-chat serialization, refcounted
+}
+
+type chatLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+type chatLockTable struct {
+	mu    sync.Mutex
+	locks map[int64]*chatLock
+}
+
+// lockChat serializes updates for one chat. The lock entry is removed when
+// the last owner (including waiters) releases it, so a long-running public
+// bot does not leak one mutex per chat forever.
+func (b *Bot) lockChat(chatID int64) func() {
+	b.chatLocks.mu.Lock()
+	if b.chatLocks.locks == nil {
+		b.chatLocks.locks = make(map[int64]*chatLock)
+	}
+	l := b.chatLocks.locks[chatID]
+	if l == nil {
+		l = &chatLock{}
+		b.chatLocks.locks[chatID] = l
+	}
+	l.refs++
+	b.chatLocks.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		b.chatLocks.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(b.chatLocks.locks, chatID)
+		}
+		b.chatLocks.mu.Unlock()
+	}
 }
 
 func New(api API, backend Backend, log *slog.Logger) *Bot {
@@ -63,6 +103,7 @@ func New(api API, backend Backend, log *slog.Logger) *Bot {
 		sessions: make(map[int64]*session),
 		uploads:  make(map[int64][]time.Time),
 		menus:    make(map[int64][]int64),
+		lastSeen: make(map[int64]time.Time),
 	}
 }
 
@@ -90,7 +131,35 @@ func (b *Bot) Run(ctx context.Context) error {
 	menuCtx, cancelMenu := context.WithTimeout(ctx, 10*time.Second)
 	b.configureMenu(menuCtx)
 	cancelMenu()
+
+	// A small worker pool keeps a 20 MB upload/ingest from blocking every
+	// other chat. Per-chat locks preserve command order within one dialog.
+	jobs := make(chan Update, 64)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case u, ok := <-jobs:
+					if !ok {
+						return
+					}
+					b.handleUpdate(ctx, u)
+				}
+			}
+		}()
+	}
+	defer func() {
+		close(jobs)
+		wg.Wait()
+	}()
+
 	var offset int64
+	lastSweep := time.Now()
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -108,7 +177,31 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 		for _, update := range updates {
 			offset = update.UpdateID + 1
-			b.handleUpdate(ctx, update)
+			select {
+			case jobs <- update:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		if time.Since(lastSweep) > time.Hour {
+			b.sweepState()
+			lastSweep = time.Now()
+		}
+	}
+}
+
+// sweepState drops per-chat state that has been idle for a day. It keeps a
+// long-running public bot from growing its session/menu/upload maps forever.
+func (b *Bot) sweepState() {
+	cutoff := time.Now().Add(-24 * time.Hour)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, seen := range b.lastSeen {
+		if seen.Before(cutoff) {
+			delete(b.lastSeen, id)
+			delete(b.sessions, id)
+			delete(b.uploads, id)
+			delete(b.menus, id)
 		}
 	}
 }
@@ -145,6 +238,13 @@ func (b *Bot) handleUpdate(ctx context.Context, u Update) {
 			b.log.Error("telegram update panic", "error", recovered)
 		}
 	}()
+	if chatID := updateChatID(u); chatID != 0 {
+		unlock := b.lockChat(chatID)
+		defer unlock()
+		b.mu.Lock()
+		b.lastSeen[chatID] = time.Now()
+		b.mu.Unlock()
+	}
 	if u.CallbackQuery != nil {
 		b.handleCallback(ctx, u.CallbackQuery)
 		return
@@ -152,6 +252,16 @@ func (b *Bot) handleUpdate(ctx context.Context, u Update) {
 	if u.Message != nil {
 		b.handleMessage(ctx, u.Message)
 	}
+}
+
+func updateChatID(u Update) int64 {
+	if u.CallbackQuery != nil && u.CallbackQuery.Message != nil {
+		return u.CallbackQuery.Message.Chat.ID
+	}
+	if u.Message != nil {
+		return u.Message.Chat.ID
+	}
+	return 0
 }
 
 func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
@@ -193,7 +303,11 @@ func (b *Bot) authorize(ctx context.Context, from *TGUser) (*User, string, bool)
 		return nil, fallback, false
 	}
 	u, err := b.backend.UserByTelegramID(ctx, from.ID)
-	if err != nil || u == nil || u.Disabled {
+	if err != nil {
+		b.log.Warn("telegram authorize", "telegram_id", from.ID, "error", err)
+		return nil, fallback, false
+	}
+	if u == nil || u.Disabled {
 		return nil, fallback, false
 	}
 	lang := b.backend.Language(ctx, u.ID)
@@ -697,7 +811,15 @@ func (b *Bot) bookCardHTML(lang string, book *Book, budget int) string {
 		header := "\n<b>" + escHTML(b.tr(lang, "annotation")) + ":</b>\n"
 		remaining := budget - used - runeLen(header) - 2
 		if remaining > 80 {
-			add(header + escHTML(truncateRunes(annotation, remaining)))
+			escaped := escHTML(annotation)
+			if runeLen(escaped) > remaining {
+				escaped = truncateRunes(escaped, remaining)
+				// Do not cut an HTML entity in half.
+				if i := strings.LastIndex(escaped, "&"); i >= 0 && !strings.Contains(escaped[i:], ";") {
+					escaped = escaped[:i]
+				}
+			}
+			add(header + escaped)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -803,7 +925,26 @@ func (b *Bot) sendText(ctx context.Context, chatID int64, text string, opts Send
 		if i == len(chunks)-1 {
 			o = opts
 		}
-		msg, err := b.api.SendMessage(ctx, chatID, chunk, o)
+		var msg Message
+		var err error
+		for attempt := 0; attempt < 4; attempt++ {
+			msg, err = b.api.SendMessage(ctx, chatID, chunk, o)
+			if err == nil {
+				break
+			}
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.Code == 429 {
+				wait := time.Duration(apiErr.RetryAfter) * time.Second
+				if wait <= 0 {
+					wait = time.Second
+				}
+				if !sleepCtx(ctx, wait) {
+					return
+				}
+				continue
+			}
+			break
+		}
 		if err != nil {
 			b.log.Warn("telegram send", "error", err)
 			return
@@ -814,9 +955,14 @@ func (b *Bot) sendText(ctx context.Context, chatID int64, text string, opts Send
 	}
 }
 
+func isNotModified(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "message is not modified")
+}
+
 func (b *Bot) reply(ctx context.Context, chatID, messageID int64, edit bool, text string, kb *InlineKeyboardMarkup) {
 	if edit && messageID > 0 && len([]rune(text)) <= maxTextRunes {
-		if err := b.api.EditMessageText(ctx, chatID, messageID, text, kb); err == nil {
+		err := b.api.EditMessageText(ctx, chatID, messageID, text, kb)
+		if err == nil || isNotModified(err) {
 			return
 		}
 	}
@@ -825,7 +971,8 @@ func (b *Bot) reply(ctx context.Context, chatID, messageID int64, edit bool, tex
 
 func (b *Bot) editOrSend(ctx context.Context, chatID, messageID int64, cq *CallbackQuery, text string, kb *InlineKeyboardMarkup) {
 	if cq != nil && messageID > 0 && cq.Message != nil && cq.Message.Text != "" && len([]rune(text)) <= maxTextRunes {
-		if err := b.api.EditMessageText(ctx, chatID, messageID, text, kb); err == nil {
+		err := b.api.EditMessageText(ctx, chatID, messageID, text, kb)
+		if err == nil || isNotModified(err) {
 			return
 		}
 	}

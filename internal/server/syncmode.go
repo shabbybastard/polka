@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,7 +41,6 @@ func (s *Server) registerSyncRoutes(mux *http.ServeMux) {
 		"GET /main/getBooks/getSimilarBooks",
 		"GET /api/v1/collections",
 		"GET /api/v1/collections/{slug}",
-		"GET /Images/zip/{id}",
 		"GET /Images/fb2compact/{id}",
 		"GET /Images/export",
 	} {
@@ -264,9 +265,17 @@ func (s *Server) syncDownload(w http.ResponseWriter, r *http.Request) {
 			disposition = "inline"
 		}
 		w.Header().Set("Content-Type", contentTypeFor(b.Ext))
-		w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, b.Title+"."+b.Ext))
+		w.Header().Set("Content-Disposition", contentDisposition(disposition, b.Title+"."+b.Ext))
+		if r.Header.Get("Range") != "" {
+			if seeker, ok := rc.(io.ReadSeeker); ok {
+				http.ServeContent(w, r, b.Title+"."+b.Ext, time.Now(), seeker)
+				return
+			}
+		}
 		w.Header().Set("Content-Length", strconv.FormatInt(b.Size, 10))
-		ioCopy(w, rc)
+		if err := ioCopy(w, rc); err != nil {
+			s.log.Warn("sync download", "book", id, "error", err)
+		}
 		return
 	}
 	if s.sync.Online() {
@@ -302,8 +311,20 @@ func (s *Server) offlineText(r *http.Request, bookID int64) (*library.FB2Text, *
 		text, err = library.ParseFB2Text(rc, imgURL)
 	case "txt":
 		text, err = library.ParseTXT(rc)
+	case "epub":
+		raw, rerr := io.ReadAll(io.LimitReader(rc, 256<<20+1))
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		if len(raw) > 256<<20 {
+			return nil, nil, fmt.Errorf("offline epub is too large")
+		}
+		imgURL := func(id string) string {
+			return fmt.Sprintf("/api/v1/read/%d/img/%s", bookID, id)
+		}
+		text, err = library.EPUBText(bytes.NewReader(raw), int64(len(raw)), imgURL)
 	default:
-		return nil, b, nil // pdf/epub: no text needed, the file is served as is
+		return nil, b, nil // pdf: the file is served as is
 	}
 	if err != nil {
 		return nil, nil, err
@@ -333,7 +354,7 @@ func (s *Server) syncReadMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	format := strings.ToLower(b.Ext)
-	if format == "pdf" || format == "epub" {
+	if format == "pdf" {
 		writeJSON(w, map[string]any{
 			"bookId": bookID, "format": format,
 			"title": b.Title, "authors": b.Authors,
@@ -403,11 +424,22 @@ func (s *Server) syncReadImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rc.Close()
-	if !strings.EqualFold(b.Ext, "fb2") {
+	var data []byte
+	var mime string
+	switch strings.ToLower(b.Ext) {
+	case "fb2":
+		data, mime, err = library.ExtractBinary(rc, r.PathValue("imgId"))
+	case "epub":
+		raw, rerr := io.ReadAll(io.LimitReader(rc, 256<<20+1))
+		if rerr != nil || len(raw) > 256<<20 {
+			http.NotFound(w, r)
+			return
+		}
+		data, mime, err = library.EPUBBinary(bytes.NewReader(raw), int64(len(raw)), r.PathValue("imgId"))
+	default:
 		http.NotFound(w, r)
 		return
 	}
-	data, mime, err := library.ExtractBinary(rc, r.PathValue("imgId"))
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -514,17 +546,20 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 }
 
 // ioCopy is a local alias to avoid pulling io into every handler.
-func ioCopy(w http.ResponseWriter, rc interface{ Read([]byte) (int, error) }) {
+func ioCopy(w http.ResponseWriter, rc interface{ Read([]byte) (int, error) }) error {
 	buf := make([]byte, 64<<10)
 	for {
 		n, err := rc.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
+				return werr
 			}
 		}
 		if err != nil {
-			return
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
 	}
 }

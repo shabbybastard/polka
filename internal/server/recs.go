@@ -107,8 +107,15 @@ func (s *Server) handleGetSimilarBooks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bookId required", http.StatusBadRequest)
 		return
 	}
-	title := strings.TrimSpace(strings.ReplaceAll(r.URL.Query().Get("title"), "+", " "))
-	author := strings.TrimSpace(strings.ReplaceAll(r.URL.Query().Get("author"), "+", " "))
+	// The client may pass title/author, but external similar results are
+	// cached under bookId; using untrusted values would let a reader poison
+	// that cache for everybody. Always use the catalog metadata.
+	d, err := s.st.BookDetails(r.Context(), bookID)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	title, author := d.Title, d.AuthorNames
 
 	local, err := s.st.SimilarBooks(r.Context(), bookID, 24)
 	if err != nil {

@@ -3,6 +3,7 @@
 package sqlitedrv
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,12 @@ import (
 )
 
 const driverName = "sqlite"
+
+// Open opens the database with the settings, translating them into the
+// driver's syntax.
+func Open(path string, o Options) (*sql.DB, error) {
+	return sql.Open(driverName, dsn(path, o))
+}
 
 func dsn(path string, o Options) string {
 	var p []string

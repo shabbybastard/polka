@@ -124,6 +124,7 @@ var ErrFileTooLarge = errors.New("telegram file exceeds the size limit")
 type APIError struct {
 	Code        int
 	Description string
+	RetryAfter  int
 }
 
 func (e *APIError) Error() string {
@@ -154,6 +155,9 @@ type apiResponse struct {
 	Result      json.RawMessage `json:"result"`
 	Description string          `json:"description"`
 	ErrorCode   int             `json:"error_code"`
+	Parameters  struct {
+		RetryAfter int `json:"retry_after"`
+	} `json:"parameters"`
 }
 
 func (c *Client) call(ctx context.Context, method string, payload any) (json.RawMessage, error) {
@@ -176,7 +180,7 @@ func (c *Client) call(ctx context.Context, method string, payload any) (json.Raw
 		return nil, errors.New("telegram response is not valid JSON")
 	}
 	if !out.OK {
-		return nil, &APIError{Code: out.ErrorCode, Description: out.Description}
+		return nil, &APIError{Code: out.ErrorCode, Description: out.Description, RetryAfter: out.Parameters.RetryAfter}
 	}
 	return out.Result, nil
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shabbybastard/polka/internal/enrich"
 	"github.com/shabbybastard/polka/internal/genres"
 	"github.com/shabbybastard/polka/internal/store"
 )
@@ -27,6 +28,64 @@ type genreEntry struct {
 }
 
 const genreCacheTTL = 5 * time.Minute
+
+// searchStatsCache avoids re-running three FTS count queries for every
+// keystroke. Stats are exact but short-lived; the catalog changes rarely.
+type searchStatsCache struct {
+	mu      sync.Mutex
+	entries map[string]searchStatsEntry
+}
+
+type searchStatsEntry struct {
+	stats   store.SearchStats
+	expires time.Time
+}
+
+const (
+	searchStatsTTL   = 30 * time.Second
+	searchStatsLimit = 256
+)
+
+func (c *searchStatsCache) get(key string) (store.SearchStats, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || time.Now().After(e.expires) {
+		if ok {
+			delete(c.entries, key)
+		}
+		return store.SearchStats{}, false
+	}
+	return e.stats, true
+}
+
+func (c *searchStatsCache) put(key string, stats store.SearchStats) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]searchStatsEntry, 32)
+	}
+	if len(c.entries) >= searchStatsLimit {
+		for k, v := range c.entries {
+			if time.Now().After(v.expires) {
+				delete(c.entries, k)
+			}
+		}
+		for k := range c.entries {
+			if len(c.entries) < searchStatsLimit {
+				break
+			}
+			delete(c.entries, k)
+		}
+	}
+	c.entries[key] = searchStatsEntry{stats: stats, expires: time.Now().Add(searchStatsTTL)}
+}
+
+func (s *Server) invalidateSearchStats() {
+	s.searchStats.mu.Lock()
+	s.searchStats.entries = nil
+	s.searchStats.mu.Unlock()
+}
 
 func (s *Server) invalidateGenreCache() {
 	s.genres.mu.Lock()
@@ -96,6 +155,10 @@ func (s *Server) isbnBooks(r *http.Request, query string) []store.Book {
 	books, err := s.st.SearchByISBN(r.Context(), query)
 	if err == nil && len(books) > 0 {
 		return books
+	}
+	enabled := s.enrichEnabled(r)
+	if !enabled[enrich.SourceOpenLibrary] && !enabled[enrich.SourceGoogleBooks] {
+		return nil
 	}
 	info, err := s.enrich.ResolveISBN(r.Context(), store.NormalizeISBN(query))
 	if err != nil || info == nil {

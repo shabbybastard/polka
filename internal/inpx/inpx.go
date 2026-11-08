@@ -24,6 +24,12 @@ const (
 
 	// Default field order when structure.info is missing.
 	defaultStructure = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;LIBRATE;KEYWORDS;YEAR;SOURCELIB"
+
+	// Metadata files and records are attacker-controlled archive entries.
+	// Keep them small enough to avoid a zip bomb while still accepting any
+	// real-world catalog.
+	maxInfoBytes    = 8 << 20
+	maxInpxLineSize = 8 << 20
 )
 
 type Author struct {
@@ -69,8 +75,11 @@ func Open(filePath string) (*File, error) {
 	for _, entry := range zr.File {
 		switch strings.ToLower(entry.Name) {
 		case structureEntry:
-			if s, err := readAll(entry); err == nil && strings.TrimSpace(s) != "" {
-				structure = s
+			if s, err := readAll(entry); err == nil {
+				s = strings.TrimPrefix(s, "\uFEFF")
+				if strings.TrimSpace(s) != "" {
+					structure = s
+				}
 			}
 		case collectionEntry:
 			if s, err := readAll(entry); err == nil {
@@ -88,9 +97,20 @@ func Open(filePath string) (*File, error) {
 		}
 	}
 	for _, field := range strings.Split(structure, ";") {
-		if field = strings.TrimSpace(field); field != "" {
+		if field = strings.ToUpper(strings.TrimSpace(field)); field != "" {
 			f.fields = append(f.fields, field)
 		}
+	}
+	hasTitle := false
+	for _, field := range f.fields {
+		if field == "TITLE" {
+			hasTitle = true
+			break
+		}
+	}
+	if !hasTitle {
+		zr.Close()
+		return nil, fmt.Errorf("inpx structure has no TITLE field")
 	}
 	if len(f.inps) == 0 {
 		zr.Close()
@@ -128,23 +148,21 @@ func (f *File) readInp(inp *zip.File, fn func(*Record) error) error {
 	base := strings.TrimSuffix(path.Base(inp.Name), path.Ext(inp.Name))
 	defaultFolder := base + ".zip"
 
-	r := bufio.NewReaderSize(rc, 1<<20)
-	for lineNo := 1; ; lineNo++ {
-		line, err := r.ReadString('\n')
-		if line != "" {
-			if rec := parseLine(line, f.fields, defaultFolder); rec != nil {
-				if err := fn(rec); err != nil {
-					return err
-				}
+	r := bufio.NewScanner(rc)
+	r.Buffer(make([]byte, 64<<10), maxInpxLineSize)
+	lineNo := 0
+	for r.Scan() {
+		lineNo++
+		if rec := parseLine(r.Text(), f.fields, defaultFolder); rec != nil {
+			if err := fn(rec); err != nil {
+				return err
 			}
 		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("line %d: %w", lineNo, err)
-		}
 	}
+	if err := r.Err(); err != nil {
+		return fmt.Errorf("line %d: %w", lineNo+1, err)
+	}
+	return nil
 }
 
 func parseLine(line string, fields []string, defaultFolder string) *Record {
@@ -254,6 +272,12 @@ func readAll(f *zip.File) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	b, err := io.ReadAll(rc)
-	return string(b), err
+	b, err := io.ReadAll(io.LimitReader(rc, maxInfoBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxInfoBytes {
+		return "", fmt.Errorf("inpx metadata file %q is too large", f.Name)
+	}
+	return string(b), nil
 }

@@ -79,13 +79,14 @@ const ReaderPage = () => {
   }, []);
 
   const totalRef = useRef(0);
+  const currentRef = useRef({ index: 0, ratio: 0 });
   const persist = useCallback(
     (index, ratio) => {
       const overall = totalRef.current > 0 ? Math.min(1, (index + ratio) / totalRef.current) : 0;
       if (serverStored.current) {
-        saveProgress(bookId, index, ratio, overall);
+        saveProgress(bookId, index, ratio, overall).catch(() => {});
       } else {
-        localProgress.set(bookId, index, ratio);
+        localProgress.set(bookId, index, ratio, overall);
       }
     },
     [bookId]
@@ -110,7 +111,8 @@ const ReaderPage = () => {
         return fetchChapter(bookId, index).then((ch) => {
           if (!cancelled) {
             setLoaded([ch]);
-            setCurrent({ index, ratio: restoreTo.current.ratio });
+            currentRef.current = { index, ratio: restoreTo.current.ratio };
+            setCurrent(currentRef.current);
           }
         });
       })
@@ -173,6 +175,7 @@ const ReaderPage = () => {
         if (!found) return;
         const index = Number(found.dataset.chapter);
         const ratio = Math.max(0, Math.min(1, (anchor - found.offsetTop) / Math.max(1, found.offsetHeight)));
+        currentRef.current = { index, ratio };
         setCurrent((prev) => (prev.index !== index || Math.abs(prev.ratio - ratio) > 0.005 ? { index, ratio } : prev));
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => persist(index, ratio), 1200);
@@ -180,18 +183,26 @@ const ReaderPage = () => {
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
-    const flush = () => document.visibilityState === "hidden" && persist(current.index, current.ratio);
+    const flush = () =>
+      document.visibilityState === "hidden" && persist(currentRef.current.index, currentRef.current.ratio);
     document.addEventListener("visibilitychange", flush);
     return () => {
       window.removeEventListener("scroll", onScroll);
       document.removeEventListener("visibilitychange", flush);
       cancelAnimationFrame(raf);
-      clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        // Leaving the page before the debounce fires must not lose the
+        // last position.
+        persist(currentRef.current.index, currentRef.current.ratio);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded.length, persist]);
 
   // --- Navigate to a chapter (TOC, keyboard) ---
+  const goToSeq = useRef(0);
   const goTo = useCallback(
     (n) => {
       if (!meta || n < 0 || n >= total) return;
@@ -202,11 +213,14 @@ const ReaderPage = () => {
         window.scrollTo({ top: already.offsetTop - 60, behavior: "smooth" });
         return;
       }
+      const seq = ++goToSeq.current;
       fetchChapter(bookId, n)
         .then((ch) => {
+          if (seq !== goToSeq.current) return; // a newer jump won
           restoreTo.current = { index: n, ratio: 0 };
           setLoaded([ch]);
-          setCurrent({ index: n, ratio: 0 });
+          currentRef.current = { index: n, ratio: 0 };
+          setCurrent(currentRef.current);
           persist(n, 0);
         })
         .catch(() => {});

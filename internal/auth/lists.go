@@ -15,17 +15,33 @@ CREATE TABLE IF NOT EXISTS lists (
 	user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
 	name       TEXT NOT NULL,
 	builtin    TEXT NOT NULL DEFAULT '',
-	created_at TEXT NOT NULL DEFAULT (datetime('now')),
+	deleted    INTEGER NOT NULL DEFAULT 0,
+	updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
 	UNIQUE (user_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS list_books (
 	list_id  INTEGER NOT NULL REFERENCES lists (id) ON DELETE CASCADE,
 	book_id  INTEGER NOT NULL,
-	added_at TEXT NOT NULL DEFAULT (datetime('now')),
+	deleted  INTEGER NOT NULL DEFAULT 0,
+	added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
 	PRIMARY KEY (list_id, book_id)
 ) WITHOUT ROWID;
 `
+
+func migrateListTombstones(db *sql.DB) error {
+	if err := addColumnIfMissing(db, "lists", "deleted", `deleted INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "lists", "updated_at", `updated_at TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE lists SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE updated_at = ''`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(db, "list_books", "deleted", `deleted INTEGER NOT NULL DEFAULT 0`)
+}
 
 // BuiltinWishlist is the built-in "Want to read" list.
 const BuiltinWishlist = "wishlist"
@@ -37,17 +53,19 @@ var (
 )
 
 type List struct {
-	ID      int64
-	Name    string
-	Builtin string
-	Books   int
+	ID        int64
+	Name      string
+	Builtin   string
+	Deleted   bool
+	UpdatedAt string
+	Books     int
 }
 
 func (s *Service) Lists(ctx context.Context, userID int64) ([]List, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT l.id, l.name, l.builtin,
-		       (SELECT count(*) FROM list_books lb WHERE lb.list_id = l.id)
-		FROM lists l WHERE l.user_id = ?
+		SELECT l.id, l.name, l.builtin, l.deleted, l.updated_at,
+		       (SELECT count(*) FROM list_books lb WHERE lb.list_id = l.id AND lb.deleted = 0)
+		FROM lists l WHERE l.user_id = ? AND l.deleted = 0
 		ORDER BY l.builtin DESC, l.name`, userID)
 	if err != nil {
 		return nil, err
@@ -57,9 +75,11 @@ func (s *Service) Lists(ctx context.Context, userID int64) ([]List, error) {
 	var out []List
 	for rows.Next() {
 		var l List
-		if err := rows.Scan(&l.ID, &l.Name, &l.Builtin, &l.Books); err != nil {
+		var deleted int
+		if err := rows.Scan(&l.ID, &l.Name, &l.Builtin, &deleted, &l.UpdatedAt, &l.Books); err != nil {
 			return nil, err
 		}
+		l.Deleted = deleted != 0
 		out = append(out, l)
 	}
 	return out, rows.Err()
@@ -73,10 +93,26 @@ func (s *Service) CreateList(ctx context.Context, userID int64, name string) (*L
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO lists (user_id, name) VALUES (?, ?)`, userID, name)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if !strings.Contains(err.Error(), "UNIQUE") {
+			return nil, err
+		}
+		// A tombstone with this name may exist from a sync deletion. Revive
+		// it instead of reporting a name conflict forever.
+		var id int64
+		var deleted int
+		if qerr := s.db.QueryRowContext(ctx,
+			`SELECT id, deleted FROM lists WHERE user_id = ? AND name = ?`, userID, name).
+			Scan(&id, &deleted); qerr != nil {
 			return nil, ErrListNameTaken
 		}
-		return nil, err
+		if deleted == 0 {
+			return nil, ErrListNameTaken
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE lists SET deleted = 0, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+		return &List{ID: id, Name: name}, nil
 	}
 	id, _ := res.LastInsertId()
 	return &List{ID: id, Name: name}, nil
@@ -86,7 +122,7 @@ func (s *Service) CreateList(ctx context.Context, userID int64, name string) (*L
 func (s *Service) Wishlist(ctx context.Context, userID int64) (*List, error) {
 	var l List
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, builtin FROM lists WHERE user_id = ? AND builtin = ?`,
+		`SELECT id, name, builtin FROM lists WHERE user_id = ? AND builtin = ? AND deleted = 0`,
 		userID, BuiltinWishlist).Scan(&l.ID, &l.Name, &l.Builtin)
 	if err == nil {
 		return &l, nil
@@ -94,10 +130,35 @@ func (s *Service) Wishlist(ctx context.Context, userID int64) (*List, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
+	// Revive a deleted tombstone for the builtin list if one exists.
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id, name FROM lists WHERE user_id = ? AND builtin = ? AND deleted = 1`,
+		userID, BuiltinWishlist).Scan(&l.ID, &l.Name); err == nil {
+		if _, uerr := s.db.ExecContext(ctx,
+			`UPDATE lists SET deleted = 0, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`, l.ID); uerr != nil {
+			return nil, uerr
+		}
+		l.Builtin = BuiltinWishlist
+		return &l, nil
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO lists (user_id, name, builtin) VALUES (?, ?, ?)`,
 		userID, "Хочу прочитать", BuiltinWishlist)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			// An ordinary list with the builtin name already exists. Adopt it
+			// instead of failing every wishlist sync forever.
+			var id int64
+			if qerr := s.db.QueryRowContext(ctx,
+				`SELECT id FROM lists WHERE user_id = ? AND name = ?`, userID, "Хочу прочитать").Scan(&id); qerr == nil {
+				if _, uerr := s.db.ExecContext(ctx,
+					`UPDATE lists SET builtin = ?, deleted = 0, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`,
+					BuiltinWishlist, id); uerr != nil {
+					return nil, uerr
+				}
+				return &List{ID: id, Name: "Хочу прочитать", Builtin: BuiltinWishlist}, nil
+			}
+		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
@@ -108,7 +169,7 @@ func (s *Service) Wishlist(ctx context.Context, userID int64) (*List, error) {
 func (s *Service) userList(ctx context.Context, userID, listID int64) (*List, error) {
 	var l List
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, builtin FROM lists WHERE id = ? AND user_id = ?`,
+		`SELECT id, name, builtin FROM lists WHERE id = ? AND user_id = ? AND deleted = 0`,
 		listID, userID).Scan(&l.ID, &l.Name, &l.Builtin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrListNotFound
@@ -129,7 +190,7 @@ func (s *Service) RenameList(ctx context.Context, userID, listID int64, name str
 		return errors.New("list name is required")
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`UPDATE lists SET name = ? WHERE id = ?`, name, listID); err != nil {
+		`UPDATE lists SET name = ?, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`, name, listID); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return ErrListNameTaken
 		}
@@ -146,16 +207,31 @@ func (s *Service) DeleteList(ctx context.Context, userID, listID int64) error {
 	if l.Builtin != "" {
 		return ErrListBuiltin
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM lists WHERE id = ?`, listID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE lists SET deleted = 1, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`, listID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE list_books SET deleted = 1, added_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE list_id = ?`, listID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) AddToList(ctx context.Context, userID, listID, bookID int64) error {
 	if _, err := s.userList(ctx, userID, listID); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO list_books (list_id, book_id) VALUES (?, ?)`, listID, bookID)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO list_books (list_id, book_id, deleted, added_at)
+		VALUES (?, ?, 0, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		ON CONFLICT (list_id, book_id) DO UPDATE
+		SET deleted = 0, added_at = strftime('%Y-%m-%d %H:%M:%f', 'now')`, listID, bookID)
 	return err
 }
 
@@ -163,8 +239,11 @@ func (s *Service) RemoveFromList(ctx context.Context, userID, listID, bookID int
 	if _, err := s.userList(ctx, userID, listID); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM list_books WHERE list_id = ? AND book_id = ?`, listID, bookID)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO list_books (list_id, book_id, deleted, added_at)
+		VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		ON CONFLICT (list_id, book_id) DO UPDATE
+		SET deleted = 1, added_at = strftime('%Y-%m-%d %H:%M:%f', 'now')`, listID, bookID)
 	return err
 }
 
@@ -174,7 +253,7 @@ func (s *Service) ListBookIDs(ctx context.Context, userID, listID int64, limit, 
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT book_id FROM list_books WHERE list_id = ?
+		SELECT book_id FROM list_books WHERE list_id = ? AND deleted = 0
 		ORDER BY added_at DESC, book_id DESC LIMIT ? OFFSET ?`, listID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -197,7 +276,7 @@ func (s *Service) BookListIDs(ctx context.Context, userID, bookID int64) ([]int6
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT lb.list_id FROM list_books lb
 		JOIN lists l ON l.id = lb.list_id
-		WHERE l.user_id = ? AND lb.book_id = ?`, userID, bookID)
+		WHERE l.user_id = ? AND l.deleted = 0 AND lb.deleted = 0 AND lb.book_id = ?`, userID, bookID)
 	if err != nil {
 		return nil, err
 	}

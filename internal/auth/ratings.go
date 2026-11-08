@@ -20,11 +20,16 @@ CREATE TABLE IF NOT EXISTS book_ratings (
 	user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
 	book_id    INTEGER NOT NULL,
 	rating     INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+	deleted    INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 	PRIMARY KEY (user_id, book_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_ratings_book ON book_ratings (book_id);
 `
+
+func migrateRatingTombstone(db *sql.DB) error {
+	return addColumnIfMissing(db, "book_ratings", "deleted", `deleted INTEGER NOT NULL DEFAULT 0`)
+}
 
 // --- Settings (key-value) ---
 
@@ -47,27 +52,29 @@ func (s *Service) SetSetting(ctx context.Context, key, value string) error {
 
 // RateBook sets a rating 1..5; rating = 0 removes the rating.
 func (s *Service) RateBook(ctx context.Context, userID, bookID int64, rating int) error {
-	if rating == 0 {
-		_, err := s.db.ExecContext(ctx,
-			`DELETE FROM book_ratings WHERE user_id = ? AND book_id = ?`, userID, bookID)
-		return err
-	}
-	if rating < 1 || rating > 5 {
+	if rating < 0 || rating > 5 {
 		return fmt.Errorf("rating must be 0..5")
 	}
+	deleted := 0
+	if rating == 0 {
+		// Keep a tombstone instead of deleting the row: the next sync must
+		// propagate the removal instead of being resurrected by a peer.
+		deleted = 1
+		rating = 1
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO book_ratings (user_id, book_id, rating, updated_at)
-		VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		INSERT INTO book_ratings (user_id, book_id, rating, deleted, updated_at)
+		VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		ON CONFLICT (user_id, book_id) DO UPDATE
-		SET rating = excluded.rating, updated_at = excluded.updated_at`,
-		userID, bookID, rating)
+		SET rating = excluded.rating, deleted = excluded.deleted, updated_at = excluded.updated_at`,
+		userID, bookID, rating, deleted)
 	return err
 }
 
 // BookRating returns the book's average rating across all users.
 func (s *Service) BookRating(ctx context.Context, bookID int64) (avg float64, count int, err error) {
 	err = s.db.QueryRowContext(ctx,
-		`SELECT coalesce(avg(rating), 0), count(*) FROM book_ratings WHERE book_id = ?`, bookID).
+		`SELECT coalesce(avg(rating), 0), count(*) FROM book_ratings WHERE book_id = ? AND deleted = 0`, bookID).
 		Scan(&avg, &count)
 	return avg, count, err
 }
@@ -76,7 +83,7 @@ func (s *Service) BookRating(ctx context.Context, bookID int64) (avg float64, co
 // filters "liked" ones (0 — any).
 func (s *Service) RatedBookIDs(ctx context.Context, userID int64, minRating int) ([]int64, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT book_id FROM book_ratings WHERE user_id = ? AND rating >= ? ORDER BY updated_at DESC`,
+		`SELECT book_id FROM book_ratings WHERE user_id = ? AND deleted = 0 AND rating >= ? ORDER BY updated_at DESC`,
 		userID, minRating)
 	if err != nil {
 		return nil, err
@@ -97,7 +104,8 @@ func (s *Service) RatedBookIDs(ctx context.Context, userID int64, minRating int)
 func (s *Service) AllListBookIDs(ctx context.Context, userID int64) ([]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT lb.book_id FROM list_books lb
-		JOIN lists l ON l.id = lb.list_id WHERE l.user_id = ?`, userID)
+		JOIN lists l ON l.id = lb.list_id
+		WHERE l.user_id = ? AND l.deleted = 0 AND lb.deleted = 0`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +125,7 @@ func (s *Service) AllListBookIDs(ctx context.Context, userID int64) ([]int64, er
 func (s *Service) UserRating(ctx context.Context, userID, bookID int64) int {
 	var r int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT rating FROM book_ratings WHERE user_id = ? AND book_id = ?`, userID, bookID).Scan(&r)
+		`SELECT rating FROM book_ratings WHERE user_id = ? AND book_id = ? AND deleted = 0`, userID, bookID).Scan(&r)
 	if errors.Is(err, sql.ErrNoRows) || err != nil {
 		return 0
 	}

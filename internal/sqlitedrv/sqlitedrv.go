@@ -1,10 +1,8 @@
-// Package sqlitedrv selects the SQLite driver per platform:
-// pure Go (modernc) everywhere, the CGO mattn driver on Android:
-// modernc/libc uses raw system calls (lstat and others)
-// that Android forbids via seccomp.
+// Package sqlitedrv selects the SQLite driver per platform. Desktop and
+// server builds use the pure-Go modernc driver. Android is not supported by
+// this build: modernc/libc relies on system calls that Android seccomp
+// policies reject, and the CGO mattn driver is not shipped.
 package sqlitedrv
-
-import "database/sql"
 
 // Options are common connection settings independent of the driver.
 type Options struct {
@@ -12,9 +10,4 @@ type Options struct {
 	SyncNormal  bool
 	BusyTimeout int // milliseconds
 	ForeignKeys bool
-}
-
-// Open opens the database with the settings, translating them into the driver's syntax.
-func Open(path string, o Options) (*sql.DB, error) {
-	return sql.Open(driverName, dsn(path, o))
 }

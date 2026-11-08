@@ -35,6 +35,14 @@ const (
 	transientTTL = 5 * time.Minute
 	httpTimeout  = 6 * time.Second
 
+	// Keep the persisted cache bounded; without these caps a long-running
+	// public instance can grow enrichment.json without limit.
+	maxEnrichmentEntries = 10000
+	maxSimilarEntries    = 5000
+
+	persistEvery  = 100
+	persistMinGap = 2 * time.Second
+
 	// Background genre loading is deliberately slow: LiveLib treats a
 	// bursting client as a bot and starts returning 403.
 	throttleDelay  = 2 * time.Second
@@ -70,6 +78,9 @@ type Enrichment struct {
 type cacheEntry struct {
 	Result    *Enrichment `json:"result"`
 	FetchedAt time.Time   `json:"fetchedAt"`
+	// Partial marks a result where at least one enabled source failed
+	// transiently. It is kept only briefly instead of for successTTL.
+	Partial bool `json:"partial,omitempty"`
 	// TagKey lists the tag sources used for this entry. Changing the
 	// administrator's per-source toggles invalidates the cached tags.
 	TagKey string `json:"tagKey,omitempty"`
@@ -93,6 +104,10 @@ type Provider struct {
 
 	throttleMu  sync.Mutex
 	lastRequest map[string]time.Time
+
+	journalWrites       uint64
+	similarPersistCount uint64
+	lastSimilarPersist  time.Time
 
 	googleAPIKey string // guarded by mu
 
@@ -121,15 +136,93 @@ func New(cachePath string) *Provider {
 	return p
 }
 
+func (p *Provider) cacheJournalPath() string { return p.cachePath + ".journal" }
+
 func (p *Provider) loadCache() {
-	data, err := os.ReadFile(p.cachePath)
+	if p.cache == nil {
+		p.cache = map[string]cacheEntry{}
+	}
+	if data, err := os.ReadFile(p.cachePath); err == nil {
+		json.Unmarshal(data, &p.cache)
+	}
+	data, err := os.ReadFile(p.cacheJournalPath())
 	if err != nil {
 		return
 	}
-	json.Unmarshal(data, &p.cache)
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec cacheJournalRecord
+		if json.Unmarshal(line, &rec) != nil || rec.Key == "" {
+			continue
+		}
+		if rec.Delete {
+			delete(p.cache, rec.Key)
+		} else if rec.Entry != nil {
+			p.cache[rec.Key] = *rec.Entry
+		}
+	}
+	// Compact a journal left by an interrupted process.
+	p.writeCacheLocked()
 }
 
-func (p *Provider) persistCache() {
+type cacheJournalRecord struct {
+	Key    string      `json:"k"`
+	Entry  *cacheEntry `json:"e,omitempty"`
+	Delete bool        `json:"d,omitempty"`
+}
+
+// persistEntryLocked appends one cache update. A full rewrite happens only
+// after a batch of journal entries, so bulk genre loading is no longer O(n²)
+// on every book. The caller holds p.mu.
+func (p *Provider) persistEntryLocked(key string) {
+	p.journalWrites++
+	if p.journalWrites == 1 || p.journalWrites >= 500 {
+		p.writeCacheLocked()
+		if p.journalWrites >= 500 {
+			p.journalWrites = 0
+		}
+		return
+	}
+	entry := p.cache[key]
+	p.appendJournalLocked(cacheJournalRecord{Key: key, Entry: &entry})
+}
+
+func (p *Provider) persistDeleteLocked(key string) {
+	p.journalWrites++
+	if p.journalWrites == 1 || p.journalWrites >= 500 {
+		p.writeCacheLocked()
+		if p.journalWrites >= 500 {
+			p.journalWrites = 0
+		}
+		return
+	}
+	p.appendJournalLocked(cacheJournalRecord{Key: key, Delete: true})
+}
+
+func (p *Provider) appendJournalLocked(rec cacheJournalRecord) {
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(p.cacheJournalPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		// Fall back to a full rewrite if the journal cannot be opened.
+		p.writeCacheLocked()
+		return
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
+		p.writeCacheLocked()
+		return
+	}
+	f.Close()
+}
+
+// writeCacheLocked performs the actual JSON rewrite and drops the journal.
+// The caller holds p.mu.
+func (p *Provider) writeCacheLocked() {
 	data, err := json.Marshal(p.cache)
 	if err != nil {
 		return
@@ -138,7 +231,20 @@ func (p *Provider) persistCache() {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}
-	os.Rename(tmp, p.cachePath)
+	if os.Rename(tmp, p.cachePath) == nil {
+		os.Remove(p.cacheJournalPath())
+	}
+}
+
+// Flush writes both caches immediately and drops the journal. Call it during
+// graceful shutdown so the last journal entries are compacted safely.
+func (p *Provider) Flush() {
+	p.mu.Lock()
+	p.writeCacheLocked()
+	if p.similar != nil {
+		p.writeSimilarCacheLocked()
+	}
+	p.mu.Unlock()
 }
 
 func tagSourcesKey(tagSources map[string]bool) string {
@@ -243,6 +349,9 @@ func (p *Provider) Cached(key string, enabled map[string]bool) *Enrichment {
 	if e.Result.Negative {
 		ttl = negativeTTL
 	}
+	if e.Partial {
+		ttl = transientTTL
+	}
 	if time.Since(e.FetchedAt) >= ttl {
 		return nil
 	}
@@ -269,6 +378,20 @@ func (p *Provider) Cached(key string, enabled map[string]bool) *Enrichment {
 	return view
 }
 
+// ForgetAll drops every cached enrichment and similar-books entry. A catalog
+// replace can reuse book ids for different books, so keeping the old entries
+// would attach ratings and genres to the wrong titles.
+func (p *Provider) ForgetAll() {
+	p.mu.Lock()
+	p.cache = map[string]cacheEntry{}
+	p.similar = map[string]similarEntry{}
+	p.backoff = map[string]time.Time{}
+	p.mu.Unlock()
+	os.Remove(p.cachePath)
+	os.Remove(p.cacheJournalPath())
+	os.Remove(p.similarCachePath())
+}
+
 // ForgetBook drops cached enrichment and similar-books data for one book.
 // The next page load queries the sources again.
 func (p *Provider) ForgetBook(bookID string) {
@@ -277,13 +400,20 @@ func (p *Provider) ForgetBook(bookID string) {
 
 	if _, ok := p.cache[bookID]; ok {
 		delete(p.cache, bookID)
-		p.persistCache()
+		p.persistDeleteLocked(bookID)
 	}
 	if p.similar == nil {
 		p.loadSimilarCache()
 	}
-	if _, ok := p.similar["sim:"+bookID]; ok {
-		delete(p.similar, "sim:"+bookID)
+	prefix := "sim:" + bookID + "|"
+	changed := false
+	for key := range p.similar {
+		if key == "sim:"+bookID || strings.HasPrefix(key, prefix) {
+			delete(p.similar, key)
+			changed = true
+		}
+	}
+	if changed {
 		p.persistSimilarCache()
 	}
 }
@@ -297,6 +427,9 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 		ttl := successTTL
 		if e.Result.Negative {
 			ttl = negativeTTL
+		}
+		if e.Partial {
+			ttl = transientTTL
 		}
 		if e.Version == cacheVersion && e.SourceKey == sourceKey && e.GoogleKey == googleKey &&
 			time.Since(e.FetchedAt) < ttl && (tagKey == "" || e.TagKey == tagKey) {
@@ -315,6 +448,7 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 
 	res := &Enrichment{}
 	transientOnly := true
+	partial := false
 	for _, source := range Sources {
 		// A source may be enabled only for genre tags while its rating
 		// switch is off.
@@ -330,11 +464,15 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 		wait := p.backoff[source]
 		p.mu.Unlock()
 		if time.Now().Before(wait) {
+			// The source was enabled but skipped. If another source succeeds,
+			// do not cache the result as complete for the full 30-day TTL.
+			partial = true
 			continue
 		}
 
 		r, err := p.fetch(ctx, source, title, author, tagSources[source], throttle)
 		if err != nil {
+			partial = true
 			// Rate limits and bot blocks deserve a much longer pause than
 			// a temporary network failure.
 			delay := transientTTL
@@ -376,13 +514,33 @@ func (p *Provider) getEnrichment(ctx context.Context, key, title, author string,
 	}
 
 	p.mu.Lock()
+	p.trimCacheLocked()
 	p.cache[key] = cacheEntry{
-		Result: res, FetchedAt: time.Now(),
+		Result: res, FetchedAt: time.Now(), Partial: partial,
 		TagKey: tagKey, SourceKey: sourceKey, GoogleKey: googleKey, Version: cacheVersion,
 	}
-	p.persistCache()
+	p.persistEntryLocked(key)
 	p.mu.Unlock()
 	return res
+}
+
+// trimCacheLocked evicts the oldest entry when the persisted cache reaches
+// its cap. p.mu must be held.
+func (p *Provider) trimCacheLocked() {
+	for len(p.cache) >= maxEnrichmentEntries {
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range p.cache {
+			if oldestKey == "" || v.FetchedAt.Before(oldest) {
+				oldestKey, oldest = k, v.FetchedAt
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(p.cache, oldestKey)
+		p.persistDeleteLocked(oldestKey)
+	}
 }
 
 // collectTags merges tag lists from all sources, dropping duplicates and

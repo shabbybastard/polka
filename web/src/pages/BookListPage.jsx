@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import BookCard from "../components/BookCard";
 import { fetchAuthorBooks, fetchSeriesBooks, fetchShelfBooks } from "../api/fetchBooks";
@@ -36,6 +36,11 @@ const BookListPage = ({ kind }) => {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const idRef = useRef(id);
+
+  useEffect(() => {
+    idRef.current = id;
+  }, [id]);
 
   useEffect(() => {
     if (!id) return undefined;
@@ -77,14 +82,17 @@ const BookListPage = ({ kind }) => {
 
   const loadMore = () => {
     if (kind !== "shelf" || loadingMore || !hasMore) return;
+    const requested = id;
     setLoadingMore(true);
     fetchShelfBooks({ shelfId: id, offset: nextOffset })
       .then((res) => {
+        if (idRef.current !== requested) return;
         const chunk = res?.titlesList ?? [];
         setBooks((prev) => [...prev, ...chunk]);
         setHasMore(Boolean(res?.hasMore));
         setNextOffset(Number(res?.nextOffset ?? (nextOffset + chunk.length)));
       })
+      .catch(() => {})
       .finally(() => setLoadingMore(false));
   };
 

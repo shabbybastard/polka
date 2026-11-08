@@ -6,6 +6,7 @@ require (
 	github.com/beevik/etree v1.8.1
 	github.com/bodgit/sevenzip v1.6.4
 	github.com/gen2brain/jpegxl v0.4.5
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.47.0
@@ -21,7 +22,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.8.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

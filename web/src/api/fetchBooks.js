@@ -43,5 +43,8 @@ export const fetchBookForm = ({ selectedItemID } = {}) => get("getBookForm", { s
 export const fetchExternalEnrichment = ({ bookId, title, author, isbn } = {}) =>
   get("getExternalEnrichment", { bookId, title, author, isbn });
 
+export const saveExternalGenres = (bookId) =>
+  api.postJson(`api/v1/books/${bookId}/external-genres`);
+
 export const fetchSimilarBooks = ({ bookId, title, author } = {}) =>
   get("getSimilarBooks", { bookId, title, author });

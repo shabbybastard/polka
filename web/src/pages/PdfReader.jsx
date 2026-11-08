@@ -42,6 +42,7 @@ const PdfReader = ({ bookId, meta }) => {
   const rendered = useRef(new Set());
   const serverStored = useRef(false);
   const restoreTo = useRef(1);
+  const currentRef = useRef(1);
   const saveTimer = useRef(null);
 
   useEffect(() => {
@@ -72,8 +73,12 @@ const PdfReader = ({ bookId, meta }) => {
   // Load the document and the saved position
   useEffect(() => {
     let cancelled = false;
+    rendered.current.clear();
+    setDoc(null);
+    setNumPages(0);
+    const task = pdfjsLib.getDocument({ url: meta.fileUrl, withCredentials: true });
     Promise.all([
-      pdfjsLib.getDocument({ url: meta.fileUrl, withCredentials: true }).promise,
+      task.promise,
       fetchProgress(bookId).catch(() => null),
     ])
       .then(async ([pdf, prog]) => {
@@ -81,6 +86,7 @@ const PdfReader = ({ bookId, meta }) => {
         serverStored.current = Boolean(prog?.stored);
         const saved = prog?.stored ? prog : localProgress.get(bookId);
         restoreTo.current = Math.min(Math.max(1, Number(saved?.chapter ?? 1)), pdf.numPages);
+        currentRef.current = restoreTo.current;
 
         const page1 = await pdf.getPage(1);
         const vp = page1.getViewport({ scale: 1 });
@@ -92,15 +98,17 @@ const PdfReader = ({ bookId, meta }) => {
       .catch((err) => !cancelled && setError(err));
     return () => {
       cancelled = true;
+      rendered.current.clear();
+      task.destroy().catch(() => {});
     };
   }, [bookId, meta.fileUrl]);
 
   const persist = (page) => {
     const overall = numPages > 0 ? page / numPages : 0;
     if (serverStored.current) {
-      saveProgress(bookId, page, 0, overall, "");
+      saveProgress(bookId, page, 0, overall, "").catch(() => {});
     } else {
-      localProgress.set(bookId, page, 0);
+      localProgress.set(bookId, page, 0, overall);
     }
   };
 
@@ -156,6 +164,7 @@ const PdfReader = ({ bookId, meta }) => {
         for (const h of holders) {
           if (h.offsetTop <= anchor) page = Number(h.dataset.page);
         }
+        currentRef.current = page;
         setCurrent(page);
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => persist(page), 1200);
@@ -166,7 +175,11 @@ const PdfReader = ({ bookId, meta }) => {
       io.disconnect();
       window.removeEventListener("scroll", onScroll);
       cancelAnimationFrame(raf);
-      clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        persist(currentRef.current);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, numPages]);

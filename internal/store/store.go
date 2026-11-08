@@ -79,7 +79,10 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version >= schemaVersion {
+	if version > schemaVersion {
+		return fmt.Errorf("database schema %d is newer than this binary supports (%d); upgrade Polka", version, schemaVersion)
+	}
+	if version == schemaVersion {
 		return nil
 	}
 	tx, err := s.db.Begin()

@@ -127,6 +127,23 @@ func TestOpenDefaultsAndErrors(t *testing.T) {
 		f.Close()
 	}
 
+	// BOM and lower-case field names in structure.info must still map.
+	path = writeInpx(t, map[string]string{
+		"structure.info": "\uFEFFauthor;genre;title;file;ext;\r\n",
+		"a.inp":          line("Автор,,", "sf", "Книга", "5", "fb2"),
+	})
+	if f, err := Open(path); err != nil {
+		t.Errorf("BOM/lower-case structure: %v", err)
+	} else {
+		f.Records(func(r *Record) error {
+			if r.Title != "Книга" || r.File != "5" || r.Ext != "fb2" {
+				t.Errorf("BOM/lower-case record: %+v", r)
+			}
+			return nil
+		})
+		f.Close()
+	}
+
 	if _, err := Open(writeInpx(t, map[string]string{"collection.info": "x"})); err == nil || !strings.Contains(err.Error(), "no .inp") {
 		t.Errorf("inpx without .inp entries: %v", err)
 	}

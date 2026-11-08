@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -12,26 +13,31 @@ import (
 // secretKey is a per-installation 32-byte key kept in data-dir/secret.key
 // (0600). It encrypts secrets at rest (the SMTP password) so they are not
 // stored in the database in clear text.
-func loadSecretKey(dataDir string) []byte {
+func loadSecretKey(dataDir string) ([]byte, error) {
 	// Tests and some embedded configurations have no data directory. Keep
 	// the key in memory then; never create a stray secret.key in the CWD.
 	if dataDir == "" {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
-			return nil
+			return nil, err
 		}
-		return key
+		return key, nil
 	}
 	path := filepath.Join(dataDir, "secret.key")
 	if b, err := os.ReadFile(path); err == nil && len(b) == 32 {
-		return b
+		return b, nil
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		return nil
+		return nil, err
 	}
-	_ = os.WriteFile(path, key, 0o600)
-	return key
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		// Keep the key for this process so SMTP still works, but report the
+		// failure: on the next start a new key would make every previously
+		// encrypted SMTP password unreadable.
+		return key, fmt.Errorf("write %s: %w", path, err)
+	}
+	return key, nil
 }
 
 // encryptSecret returns base64(nonce||ciphertext); "" stays "".

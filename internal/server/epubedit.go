@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	maxEPUBUpload   = 64 << 20
+	maxEPUBUpload   = 50 << 20
+	maxStoredEPUB   = 256 << 20
 	maxCoverUpload  = 5 << 20
 	maxEPUBAuthors  = 20
 	maxEPUBFieldLen = 4096
@@ -108,10 +109,14 @@ func (s *Server) handleBookEPUBEdit(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, err)
 		return
 	}
-	original, err := io.ReadAll(rc)
+	original, err := io.ReadAll(io.LimitReader(rc, maxStoredEPUB+1))
 	rc.Close()
 	if err != nil {
 		s.apiError(w, err)
+		return
+	}
+	if len(original) > maxStoredEPUB {
+		http.Error(w, "stored EPUB is too large to edit", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -157,7 +162,8 @@ func (s *Server) handleBookEPUBEdit(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := library.EditEPUB(original, edit)
 	if err != nil {
-		http.Error(w, "failed to edit EPUB: "+err.Error(), http.StatusBadRequest)
+		s.log.Warn("edit epub", "book", id, "error", err)
+		http.Error(w, "failed to edit EPUB", http.StatusBadRequest)
 		return
 	}
 

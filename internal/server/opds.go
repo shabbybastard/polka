@@ -153,7 +153,6 @@ func opdsBookEntry(b store.Book) opdsEntry {
 	switch strings.ToLower(b.Ext) {
 	case "fb2":
 		entry.Links = append(entry.Links,
-			opdsLink{Rel: relAcquisition, Href: "/Images/zip/" + id, Type: "application/fb2+zip"},
 			opdsLink{Rel: relAcquisition, Href: "/Images/fb2/" + id, Type: "application/x-fictionbook+xml"},
 		)
 	case "epub":
@@ -251,7 +250,7 @@ func opdsBaseURL(r *http.Request) string {
 	if requestIsSecure(r) {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host
+	return scheme + "://" + requestHost(r)
 }
 
 // GET /opds/opensearch — search description.
@@ -362,7 +361,7 @@ func (s *Server) handleOpdsSearch(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		books = books[:opdsPageSize]
 	}
-	base := "/opds/search?q=" + strings.ReplaceAll(query, " ", "+")
+	base := "/opds/search?q=" + url.QueryEscape(query)
 	s.writeFeed(w, s.acquisitionFeed("urn:polka:search", tr(reqLang(r), "opds.search", query), base, page, books, hasMore))
 }
 

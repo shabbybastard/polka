@@ -60,6 +60,43 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 	return resp
 }
 
+func TestBasicCacheInvalidatesOnPasswordChange(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	users, err := auth.Open(filepath.Join(dir, "users.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer users.Close()
+	u, err := users.CreateUser(context.Background(), "alice", "oldpassword", "", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Auth: "required"}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	webFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html/>")}}
+	_, app := NewWithApp(cfg, log, st, nil, users, nil, webFS)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	if got := app.basicUser(req, "alice", "oldpassword"); got == nil {
+		t.Fatal("valid Basic credentials rejected")
+	}
+	newPassword := "newpassword"
+	if err := users.UpdateUser(context.Background(), u.ID, &newPassword, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.basicUser(req, "alice", "oldpassword"); got != nil {
+		t.Error("old password still accepted from the Basic cache")
+	}
+	if got := app.basicUser(req, "alice", "newpassword"); got == nil {
+		t.Error("new password rejected after a CLI-style password change")
+	}
+}
+
 func TestAuthFlow(t *testing.T) {
 	ts := newAuthServer(t)
 	jar, _ := cookiejar.New(nil)

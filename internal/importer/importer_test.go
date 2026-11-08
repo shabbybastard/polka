@@ -115,6 +115,96 @@ func TestImportInpx(t *testing.T) {
 
 // TestImportScale is a scale test: importing a large synthetic catalog.
 // Run explicitly: POLKA_SCALE_BOOKS=500000 go test -run Scale -v ./internal/importer/
+func TestReplaceInpxKeepsOldCatalogOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	inpxPath := makeInpx(t, dir, "", map[string][]string{
+		"arch-001.inp": {
+			record("Пушкин,Александр,Сергеевич", "poetry", "Евгений Онегин", "Классика", "1", "f1", "fb2"),
+			record("Пушкин,Александр,Сергеевич", "poetry", "Капитанская дочка", "Классика", "2", "f2", "fb2"),
+		},
+	})
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	ctx := context.Background()
+	if _, err := ImportInpx(ctx, log, st, inpxPath, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := filepath.Join(dir, "bad.inpx")
+	if err := os.WriteFile(bad, []byte("not a zip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplaceInpx(ctx, log, st, bad, dir, nil, ReplaceHooks{}); err == nil {
+		t.Fatal("ReplaceInpx accepted a broken inpx")
+	}
+	if n, _ := st.BookCount(ctx); n != 2 {
+		t.Errorf("old catalog lost after failed replace: BookCount = %d, want 2", n)
+	}
+	var found int
+	if err := st.DB().QueryRow(`SELECT count(*) FROM book_search WHERE book_search MATCH 'пушкин'`).Scan(&found); err != nil {
+		t.Fatal(err)
+	}
+	if found != 2 {
+		t.Errorf("old FTS lost after failed replace: %d matches, want 2", found)
+	}
+}
+
+func TestReplaceInpxSwapsAndCallsHook(t *testing.T) {
+	dir := t.TempDir()
+	inpxPath := makeInpx(t, dir, "", map[string][]string{
+		"arch-001.inp": {
+			record("Пушкин,Александр,Сергеевич", "poetry", "Евгений Онегин", "Классика", "1", "f1", "fb2"),
+			record("Пушкин,Александр,Сергеевич", "poetry", "Капитанская дочка", "Классика", "2", "f2", "fb2"),
+		},
+	})
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	ctx := context.Background()
+	if _, err := ImportInpx(ctx, log, st, inpxPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	stats, err := ReplaceInpx(ctx, log, st, inpxPath, dir, nil, ReplaceHooks{
+		AfterReplace: func(oldKeys, newKeys map[int64]string) error {
+			called = true
+			if len(oldKeys) != 2 || len(newKeys) != 2 {
+				t.Errorf("keys = %d/%d, want 2/2", len(oldKeys), len(newKeys))
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Error("AfterReplace hook was not called")
+	}
+	if stats.Books != 2 {
+		t.Errorf("stats.Books = %d, want 2", stats.Books)
+	}
+	if n, _ := st.BookCount(ctx); n != 2 {
+		t.Errorf("BookCount after replace = %d, want 2", n)
+	}
+	var found int
+	if err := st.DB().QueryRow(`SELECT count(*) FROM book_search WHERE book_search MATCH 'пушкин'`).Scan(&found); err != nil {
+		t.Fatal(err)
+	}
+	if found != 2 {
+		t.Errorf("FTS after replace = %d, want 2", found)
+	}
+	if gen, err := st.CatalogGeneration(ctx); err != nil || gen != 1 {
+		t.Errorf("catalog generation = %d, %v; want 1", gen, err)
+	}
+}
+
 func TestImportScale(t *testing.T) {
 	countStr := os.Getenv("POLKA_SCALE_BOOKS")
 	if countStr == "" {

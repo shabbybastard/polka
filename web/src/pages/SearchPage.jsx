@@ -29,6 +29,7 @@ const SearchPage = ({ config }) => {
   const groupId = searchParams.get("group") ?? null;
 
   const [stats, setStats] = useState(null);
+  const [statsCapped, setStatsCapped] = useState(null);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -38,13 +39,27 @@ const SearchPage = ({ config }) => {
     if (!enabled) {
       setResults([]);
       setStats(null);
+      setStatsCapped(null);
       return undefined;
     }
     let cancelled = false;
     setLoading(true);
+    setResults([]);
+    setStats(null);
+    setStatsCapped(null);
     const params = { search: query, selectedGroupID: groupId };
 
-    fetchSearchStats(params).then((res) => !cancelled && setStats(res?.searchStats ?? null));
+    fetchSearchStats(params)
+      .then((res) => {
+        if (cancelled) return;
+        setStats(res?.searchStats ?? null);
+        setStatsCapped(res?.searchStatsCapped ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStats(null);
+        setStatsCapped(null);
+      });
 
     const loaderByScope = {
       bookTitles: fetchSearchTitles,
@@ -58,6 +73,7 @@ const SearchPage = ({ config }) => {
         if (cancelled) return;
         setResults(res?.titlesList ?? res?.authorsList ?? res?.seriesList ?? res?.genresList ?? []);
       })
+      .catch(() => !cancelled && setResults([]))
       .finally(() => !cancelled && setLoading(false));
 
     return () => {
@@ -181,7 +197,10 @@ const SearchPage = ({ config }) => {
             >
               {s.label}
               {stats && (
-                <span className="search-page__scope-count">{stats[s.statKey] ?? 0}</span>
+                <span className="search-page__scope-count">
+                  {stats[s.statKey] ?? 0}
+                  {statsCapped?.[s.statKey] ? "+" : ""}
+                </span>
               )}
             </button>
           ))}

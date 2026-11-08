@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/shabbybastard/polka/internal/auth"
+	"github.com/shabbybastard/polka/internal/collections"
 	"github.com/shabbybastard/polka/internal/config"
 	"github.com/shabbybastard/polka/internal/importer"
 	"github.com/shabbybastard/polka/internal/library"
@@ -82,6 +83,9 @@ func runServe(log *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Auth == "desktop" {
+		return errors.New("--auth=desktop is reserved for polka-desktop; use required, public or demo")
+	}
 	cfg.Version = version
 
 	st, err := store.Open(cfg.DBPath())
@@ -131,6 +135,9 @@ func runServe(log *slog.Logger, args []string) error {
 			"login", "admin", "password", password)
 	}
 
+	if err := server.PrepareCatalogRemap(ctx, st, users); err != nil {
+		return fmt.Errorf("catalog remap: %w", err)
+	}
 	srv, app := server.NewWithApp(cfg, log, st, lib, users, nil, webFS)
 
 	runCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -171,6 +178,7 @@ func runServe(log *slog.Logger, args []string) error {
 	select {
 	case err := <-errCh:
 		stopBot()
+		app.Close()
 		return err
 	case <-runCtx.Done():
 	}
@@ -179,8 +187,10 @@ func runServe(log *slog.Logger, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
+		app.Close()
 		return fmt.Errorf("shutdown: %w", err)
 	}
+	app.Close()
 	log.Info("polka stopped")
 	return nil
 }
@@ -242,19 +252,70 @@ func runImport(log *slog.Logger, args []string) error {
 		return errors.New("укажите inpx-файл: polka import --inpx <файл.inpx>")
 	}
 
-	if replace {
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			os.Remove(cfg.DBPath() + suffix)
-		}
-	}
-
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
 
-	stats, err := importer.ImportInpx(context.Background(), log, st, inpxPath, nil)
+	ctx := context.Background()
+	if n, err := st.BookCount(ctx); err != nil {
+		return err
+	} else if n > 0 && !replace {
+		return fmt.Errorf("library is not empty (%d books); use --replace", n)
+	}
+
+	var usersSvc *auth.Service
+	usersPath := filepath.Join(cfg.DataDir, "users.db")
+	if _, err := os.Stat(usersPath); err == nil {
+		usersSvc, err = auth.Open(usersPath)
+		if err != nil {
+			return fmt.Errorf("open users database: %w", err)
+		}
+		defer usersSvc.Close()
+	}
+	hooks := importer.ReplaceHooks{
+		BeforeReplace: func(oldKeys, newKeys map[int64]string) error {
+			if usersSvc == nil {
+				return nil
+			}
+			generation, err := st.CatalogGeneration(ctx)
+			if err != nil {
+				return err
+			}
+			return usersSvc.SavePendingRemap(ctx, generation+1, store.MapBookIDs(oldKeys, newKeys))
+		},
+		AfterReplace: func(oldKeys, newKeys map[int64]string) error {
+			if usersSvc != nil {
+				generation, err := st.CatalogGeneration(ctx)
+				if err != nil {
+					return err
+				}
+				if err := usersSvc.ApplyPendingRemap(ctx, generation); err != nil {
+					return fmt.Errorf("remap user data (will retry on next start): %w", err)
+				}
+			}
+			colsPath := filepath.Join(cfg.DataDir, "collections.db")
+			if _, err := os.Stat(colsPath); err == nil {
+				cols, err := collections.Open(colsPath)
+				if err != nil {
+					return fmt.Errorf("open collections database: %w", err)
+				}
+				resetErr := cols.ResetMatches(ctx)
+				if resetErr == nil {
+					if _, err := cols.MatchAll(ctx, st); err != nil {
+						log.Warn("collections match", "error", err)
+					}
+				}
+				cols.Close()
+				if resetErr != nil {
+					return fmt.Errorf("reset collection matches: %w", resetErr)
+				}
+			}
+			return nil
+		},
+	}
+	stats, err := importer.ReplaceInpx(ctx, log, st, inpxPath, cfg.DataDir, nil, hooks)
 	if err != nil {
 		return err
 	}

@@ -1,19 +1,24 @@
 package server
 
 import (
-	"archive/zip"
 	"bytes"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shabbybastard/polka/internal/genres"
 	"github.com/shabbybastard/polka/internal/library"
 	"github.com/shabbybastard/polka/internal/store"
 )
+
+// maxRangeBuffer bounds the in-memory copy used to provide Range support for
+// archive entries that are not directly seekable.
+const maxRangeBuffer = 64 << 20
 
 // bookJSON converts a book to the format expected by the frontend.
 func bookJSON(b store.Book) map[string]any {
@@ -258,17 +263,29 @@ func (s *Server) handleGetSearchStats(w http.ResponseWriter, r *http.Request) {
 		}})
 		return
 	}
-	stats, err := s.st.SearchStats(r.Context(), query)
-	if err != nil {
-		s.apiError(w, err)
-		return
+	stats, ok := s.searchStats.get(query)
+	if !ok {
+		var err error
+		stats, err = s.st.SearchStats(r.Context(), query)
+		if err != nil {
+			s.apiError(w, err)
+			return
+		}
+		s.searchStats.put(query, stats)
 	}
-	writeJSON(w, map[string]any{"searchStats": map[string]int{
-		"bookTitles": stats.BookTitles,
-		"authors":    stats.Authors,
-		"bookSeries": stats.BookSeries,
-		"genres":     len(s.searchGenres(r, query)),
-	}})
+	writeJSON(w, map[string]any{
+		"searchStats": map[string]int{
+			"bookTitles": stats.BookTitles,
+			"authors":    stats.Authors,
+			"bookSeries": stats.BookSeries,
+			"genres":     len(s.searchGenres(r, query)),
+		},
+		"searchStatsCapped": map[string]bool{
+			"bookTitles": stats.BookTitlesCapped,
+			"authors":    stats.AuthorsCapped,
+			"bookSeries": stats.SeriesCapped,
+		},
+	})
 }
 
 func (s *Server) handleGetSearchTitles(w http.ResponseWriter, r *http.Request) {
@@ -457,8 +474,9 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	if mime == "" {
 		mime = "image/jpeg"
 	}
+	mime = safeImageMime(mime)
 	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Write(data)
 }
 
@@ -478,52 +496,32 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("inline") == "1" {
 		disposition = "inline" // view in browser (PDF etc.)
 	}
+	name := safeFilename(f.File) + "." + safeFilename(f.Ext)
 	w.Header().Set("Content-Type", contentTypeFor(f.Ext))
-	w.Header().Set("Content-Disposition", disposition+`; filename="`+safeFilename(f.File)+`.`+safeFilename(f.Ext)+`"`)
+	w.Header().Set("Content-Disposition", contentDisposition(disposition, name))
+	if r.Header.Get("Range") != "" {
+		if seeker, ok := rc.(io.ReadSeeker); ok {
+			http.ServeContent(w, r, name, time.Now(), seeker)
+			return
+		}
+		if size > 0 && size <= maxRangeBuffer {
+			if data, rerr := io.ReadAll(io.LimitReader(rc, maxRangeBuffer+1)); rerr == nil && int64(len(data)) == size {
+				http.ServeContent(w, r, name, time.Now(), bytes.NewReader(data))
+				return
+			}
+		}
+	}
 	if size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 	// Record the KOReader digest of the served file so positions pushed by
 	// e-ink devices (kosync) can be matched back to this book.
 	tee := &digestTee{}
-	copied, _ := io.Copy(io.MultiWriter(w, tee), rc)
+	copied, copyErr := io.Copy(io.MultiWriter(w, tee), rc)
+	if copyErr != nil {
+		s.log.Warn("book download", "book", f.ID, "error", copyErr)
+	}
 	s.recordDigest(tee, f.ID, size, copied)
-}
-
-func (s *Server) handleBookZip(w http.ResponseWriter, r *http.Request) {
-	f := s.bookFileOr404(w, r)
-	if f == nil {
-		return
-	}
-	rc, _, err := s.lib.Open(f.Folder, f.File, f.Ext)
-	if err != nil {
-		s.apiError(w, err)
-		return
-	}
-	defer rc.Close()
-
-	// Build the zip in memory so we can set Content-Length: without it OPDS
-	// clients (MoonReader) hang "at 100%" waiting for the size. An fb2.zip is
-	// small, so buffering is fine.
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	entry, err := zw.Create(f.File + "." + f.Ext)
-	if err == nil {
-		_, err = io.Copy(entry, rc)
-	}
-	if err == nil {
-		err = zw.Close()
-	}
-	if err != nil {
-		s.log.Warn("zip stream", "book", f.ID, "error", err)
-		s.apiError(w, err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.`+safeFilename(f.Ext)+`.zip"`)
-	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
-	w.Write(buf.Bytes())
 }
 
 func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
@@ -531,27 +529,46 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 	if f == nil {
 		return
 	}
-	rc, _, err := s.lib.Open(f.Folder, f.File, f.Ext)
+	ext := strings.ToLower(f.Ext)
+	switch ext {
+	case "fb2", "txt", "epub":
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if f.Size > maxArchiveOutput {
+		http.Error(w, "book is too large for a compact download", http.StatusRequestEntityTooLarge)
+		return
+	}
+	rc, size, err := s.lib.Open(f.Folder, f.File, f.Ext)
 	if err != nil {
 		s.apiError(w, err)
 		return
 	}
 	defer rc.Close()
+	if size > maxArchiveOutput {
+		http.Error(w, "book is too large for a compact download", http.StatusRequestEntityTooLarge)
+		return
+	}
 
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxArchiveOutput+1))
 	if err != nil {
 		s.apiError(w, err)
 		return
 	}
+	if len(data) > maxArchiveOutput {
+		http.Error(w, "book is too large for a compact download", http.StatusRequestEntityTooLarge)
+		return
+	}
 
-	switch strings.ToLower(f.Ext) {
+	switch ext {
 	case "fb2":
 		w.Header().Set("Content-Type", contentTypeFor("fb2"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.compact.fb2"`)
+		w.Header().Set("Content-Disposition", contentDisposition("attachment", f.File+".compact.fb2"))
 		w.Write(library.StripBinaries(data))
 	case "txt":
 		w.Header().Set("Content-Type", contentTypeFor("txt"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.txt"`)
+		w.Header().Set("Content-Disposition", contentDisposition("attachment", f.File+".txt"))
 		w.Write(data)
 	case "epub":
 		text, err := library.EPUBPlainText(bytes.NewReader(data), int64(len(data)))
@@ -560,7 +577,7 @@ func (s *Server) handleBookCompact(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", contentTypeFor("txt"))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+safeFilename(f.File)+`.txt"`)
+		w.Header().Set("Content-Disposition", contentDisposition("attachment", f.File+".txt"))
 		w.Write([]byte(text))
 	default:
 		http.NotFound(w, r)
@@ -582,6 +599,31 @@ func safeFilename(name string) string {
 		s = "book"
 	}
 	return s
+}
+
+// contentDisposition emits both an ASCII filename for old clients and the
+// RFC 5987 filename* parameter for non-ASCII names.
+func contentDisposition(disposition, filename string) string {
+	filename = safeFilename(filename)
+	fallback := make([]rune, 0, len(filename))
+	for _, r := range filename {
+		if r >= 0x20 && r < 0x7f && r != '"' && r != '\\' {
+			fallback = append(fallback, r)
+		} else {
+			fallback = append(fallback, '_')
+		}
+	}
+	fb := strings.TrimSpace(string(fallback))
+	if fb == "" {
+		fb = "book"
+	}
+	encoded := mime.FormatMediaType(disposition, map[string]string{"filename": filename})
+	if strings.Contains(encoded, "filename*=") {
+		if i := strings.Index(encoded, "; "); i >= 0 {
+			return disposition + `; filename="` + fb + `"; ` + encoded[i+2:]
+		}
+	}
+	return encoded
 }
 
 func contentTypeFor(ext string) string {

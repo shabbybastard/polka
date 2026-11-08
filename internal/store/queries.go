@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // Book is a book-list row in the format expected by the frontend.
@@ -144,16 +145,37 @@ func ftsQuery(input, column string) string {
 }
 
 func isWordRune(r rune) bool {
-	return r == '-' || r == '_' ||
-		(r >= '0' && r <= '9') ||
-		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-		r > 127
+	// Do not treat typographic punctuation (em dash, quotes, NBSP) as a
+	// word character: "Мастер — Маргарита" must not require a literal "—"
+	// term, and «Тихий Дон» must normalize like Тихий Дон.
+	return r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // --- Search ---
 
 type SearchStats struct {
-	BookTitles, Authors, BookSeries int
+	BookTitles, Authors, BookSeries               int
+	BookTitlesCapped, AuthorsCapped, SeriesCapped bool
+}
+
+const searchStatsCap = 10_000
+
+func (s *Store) searchStatsCount(ctx context.Context, table, ftsQ string) (int, bool, error) {
+	if ftsQ == "" {
+		return 0, false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM (
+			SELECT 1 FROM `+table+` WHERE `+table+` MATCH ? LIMIT ?
+		)`, ftsQ, searchStatsCap+1).Scan(&n)
+	if err != nil {
+		return 0, false, err
+	}
+	if n > searchStatsCap {
+		return searchStatsCap, true, nil
+	}
+	return n, false, nil
 }
 
 func (s *Store) SearchStats(ctx context.Context, query string) (SearchStats, error) {
@@ -162,16 +184,17 @@ func (s *Store) SearchStats(ctx context.Context, query string) (SearchStats, err
 	if plainQ == "" {
 		return st, nil
 	}
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM book_search WHERE book_search MATCH ?`, titleQ).Scan(&st.BookTitles); err != nil {
+	var err error
+	st.BookTitles, st.BookTitlesCapped, err = s.searchStatsCount(ctx, "book_search", titleQ)
+	if err != nil {
 		return st, err
 	}
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM authors_search WHERE authors_search MATCH ?`, plainQ).Scan(&st.Authors); err != nil {
+	st.Authors, st.AuthorsCapped, err = s.searchStatsCount(ctx, "authors_search", plainQ)
+	if err != nil {
 		return st, err
 	}
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM series_search WHERE series_search MATCH ?`, plainQ).Scan(&st.BookSeries); err != nil {
+	st.BookSeries, st.SeriesCapped, err = s.searchStatsCount(ctx, "series_search", plainQ)
+	if err != nil {
 		return st, err
 	}
 	return st, nil
@@ -196,9 +219,13 @@ func (s *Store) SearchTitlesPage(ctx context.Context, query string, limit, offse
 // library, ranking hundreds of thousands of rows costs more than it is
 // worth: the guard keeps the old take-first behavior, sorted by rating.
 func (s *Store) rankedSearch(ctx context.Context, ftsQ string, limit, offset int) ([]Book, error) {
+	// Only the "is this a very broad query?" decision needs the count. Cap
+	// the scan at 5001 rows instead of counting the whole FTS result set.
 	var matches int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM book_search WHERE book_search MATCH ?`, ftsQ).Scan(&matches); err != nil {
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM (
+			SELECT 1 FROM book_search WHERE book_search MATCH ? LIMIT 5001
+		)`, ftsQ).Scan(&matches); err != nil {
 		return nil, err
 	}
 	if matches > 5000 {
@@ -275,6 +302,11 @@ func (s *Store) SearchSeries(ctx context.Context, query string, limit int) ([]Se
 	return out, rows.Err()
 }
 
+// maxBrowseBooks is a safety bound for author/series pages that do not have
+// explicit pagination yet. It prevents one pathological author from loading
+// hundreds of thousands of rows into memory.
+const maxBrowseBooks = 10_000
+
 func (s *Store) AuthorBooks(ctx context.Context, authorID int64) ([]Book, string, error) {
 	var name string
 	err := s.db.QueryRowContext(ctx,
@@ -288,7 +320,7 @@ func (s *Store) AuthorBooks(ctx context.Context, authorID int64) ([]Book, string
 	}
 	books, err := s.queryBooks(ctx,
 		`b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)`,
-		`coalesce(s.title, ''), b.series_num, b.title`, 0, 0, authorID)
+		`coalesce(s.title, ''), b.series_num, b.title`, maxBrowseBooks, 0, authorID)
 	return books, name, err
 }
 
@@ -301,7 +333,7 @@ func (s *Store) SeriesBooks(ctx context.Context, seriesID int64) ([]Book, string
 	if err != nil {
 		return nil, "", err
 	}
-	books, err := s.queryBooks(ctx, `b.series_id = ?`, `b.series_num, b.title`, 0, 0, seriesID)
+	books, err := s.queryBooks(ctx, `b.series_id = ?`, `b.series_num, b.title`, maxBrowseBooks, 0, seriesID)
 	return books, title, err
 }
 

@@ -62,29 +62,70 @@ func (s *Server) enabledTagSources(ctx context.Context) map[string]bool {
 func (s *Server) handleGetEnrichment(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	bookID := q.Get("bookId")
-	title := strings.TrimSpace(strings.ReplaceAll(q.Get("title"), "+", " "))
-	author := strings.TrimSpace(strings.ReplaceAll(q.Get("author"), "+", " "))
-	if bookID == "" || title == "" {
+	if bookID == "" || strings.TrimSpace(q.Get("title")) == "" {
 		http.Error(w, "bookId and title are required", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseInt(bookID, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid book id", http.StatusBadRequest)
+		return
+	}
+	// Never trust title/author from the query: they select which external
+	// record is written into the shared genre catalog. Use the catalog's own
+	// metadata and let only an administrator persist external genres.
+	d, err := s.st.BookDetails(r.Context(), id)
+	if err != nil {
+		s.apiError(w, err)
 		return
 	}
 	tagSources := s.enabledTagSources(r.Context())
 	enabled := s.enrichEnabled(r)
 	s.enrich.SetGoogleAPIKey(s.users.GetSetting(r.Context(), "enrich.google_api_key", ""))
-	res := s.enrich.Get(r.Context(), bookID, title, author, enabled, tagSources)
-	if id, err := strconv.ParseInt(bookID, 10, 64); err == nil {
-		for _, src := range res.Sources {
-			if len(src.Tags) == 0 {
-				continue
-			}
-			if err := s.st.SaveBookGenres(r.Context(), id, src.Source, src.Tags); err != nil {
-				s.log.Warn("save external genres", "book", id, "source", src.Source, "error", err)
-			} else {
-				s.invalidateGenreCache()
-			}
-		}
-	}
+	key := strconv.FormatInt(id, 10)
+	res := s.enrich.Get(r.Context(), key, d.Title, d.AuthorNames, enabled, tagSources)
 	writeJSON(w, s.enrichmentView(res, enabled))
+}
+
+// POST /api/v1/books/{id}/external-genres — persist the cached external tags
+// for one book. GET stays read-only, so a cross-site image/fetch cannot
+// mutate the catalog by accident.
+func (s *Server) handleSaveExternalGenres(w http.ResponseWriter, r *http.Request) {
+	u := s.currentUser(r)
+	if u == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	d, err := s.st.BookDetails(r.Context(), id)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	tagSources := s.enabledTagSources(r.Context())
+	enabled := s.enrichEnabled(r)
+	s.enrich.SetGoogleAPIKey(s.users.GetSetting(r.Context(), "enrich.google_api_key", ""))
+	res := s.enrich.Get(r.Context(), strconv.FormatInt(id, 10), d.Title, d.AuthorNames, enabled, tagSources)
+	saved := 0
+	for _, src := range res.Sources {
+		if len(src.Tags) == 0 {
+			continue
+		}
+		if err := s.st.SaveBookGenres(r.Context(), id, src.Source, src.Tags); err != nil {
+			s.log.Warn("save external genres", "book", id, "source", src.Source, "error", err)
+			continue
+		}
+		saved++
+	}
+	if saved > 0 {
+		s.invalidateGenreCache()
+		s.invalidateSearchStats()
+	}
+	writeJSON(w, map[string]any{"saved": saved})
 }
 
 // enrichmentView removes results from disabled rating sources and picks the

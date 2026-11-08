@@ -186,7 +186,6 @@ func TestSyncModeOfflineAndOnline(t *testing.T) {
 	for _, p := range []string{
 		"/main/getBooks/getShelfBooks?shelfId=newest",
 		"/main/getBooks/getSearchAuthors?search=abc",
-		"/Images/zip/" + idStr,
 		"/admin/settings",
 	} {
 		if code, _, _ := statusOf(t, "GET", client.URL+p, ""); code != http.StatusServiceUnavailable {

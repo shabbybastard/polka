@@ -22,6 +22,8 @@ type rateLimiter struct {
 	last   time.Time // last sweep
 }
 
+const maxRateLimiterKeys = 10000
+
 type rlEntry struct {
 	count int
 	reset time.Time
@@ -48,6 +50,20 @@ func (rl *rateLimiter) allow(key string) bool {
 	}
 
 	e := rl.hits[key]
+	if e == nil && len(rl.hits) >= maxRateLimiterKeys {
+		// Bound memory under a distributed attack: evict the bucket that
+		// expires first. The limit still applies to every remaining key.
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range rl.hits {
+			if oldestKey == "" || v.reset.Before(oldest) {
+				oldestKey, oldest = k, v.reset
+			}
+		}
+		if oldestKey != "" {
+			delete(rl.hits, oldestKey)
+		}
+	}
 	if e == nil || now.After(e.reset) {
 		rl.hits[key] = &rlEntry{count: 1, reset: now.Add(rl.window)}
 		return true
@@ -57,6 +73,14 @@ func (rl *rateLimiter) allow(key string) bool {
 	}
 	e.count++
 	return true
+}
+
+// reset forgets a key after a successful attempt, so a burst of successful
+// logins does not exhaust the failure budget for a shared NAT address.
+func (rl *rateLimiter) reset(key string) {
+	rl.mu.Lock()
+	delete(rl.hits, key)
+	rl.mu.Unlock()
 }
 
 // blocked reports whether the key has exhausted its window without

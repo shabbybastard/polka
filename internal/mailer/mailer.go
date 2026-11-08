@@ -3,14 +3,26 @@
 package mailer
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"mime"
+	"net"
 	"net/smtp"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
+)
+
+const (
+	smtpDialTimeout = 15 * time.Second
+	smtpIOTimeout   = 5 * time.Minute
 )
 
 // Config describes the sending SMTP account.
@@ -37,24 +49,39 @@ func (c Config) Valid() bool {
 
 // Send delivers a message with one attachment to addr.
 func (c Config) Send(to, subject, body, attachName string, attach []byte) error {
+	return c.SendContext(context.Background(), to, subject, body, attachName, attach)
+}
+
+// SendContext is Send with cancellation: closing the request connection also
+// closes the SMTP session instead of leaving a hung goroutine behind.
+func (c Config) SendContext(ctx context.Context, to, subject, body, attachName string, attach []byte) error {
 	if !c.Valid() {
 		return fmt.Errorf("smtp is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	msg := c.build(to, subject, body, attachName, attach)
-	return c.deliver(to, msg)
+	return c.deliverContext(ctx, to, msg)
 }
 
 // Verify opens an authenticated SMTP session without sending — used by
 // the "test connection" button in the admin panel.
 func (c Config) Verify() error {
+	return c.VerifyContext(context.Background())
+}
+
+func (c Config) VerifyContext(ctx context.Context) error {
 	if !c.Valid() {
 		return fmt.Errorf("smtp is not configured")
 	}
-	client, err := c.dial()
+	client, err := c.dialContext(ctx)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
 	if err := c.auth(client); err != nil {
 		return err
 	}
@@ -62,11 +89,17 @@ func (c Config) Verify() error {
 }
 
 func (c Config) deliver(to string, msg []byte) error {
-	client, err := c.dial()
+	return c.deliverContext(context.Background(), to, msg)
+}
+
+func (c Config) deliverContext(ctx context.Context, to string, msg []byte) error {
+	client, err := c.dialContext(ctx)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
 	if err := c.auth(client); err != nil {
 		return err
 	}
@@ -87,21 +120,40 @@ func (c Config) deliver(to string, msg []byte) error {
 	if err := wc.Close(); err != nil {
 		return err
 	}
-	return client.Quit()
+	// DATA was accepted before QUIT. A broken QUIT response does not mean the
+	// message was not delivered, so do not report a send failure here.
+	_ = client.Quit()
+	return nil
 }
 
-func (c Config) dial() (*smtp.Client, error) {
+func (c Config) dialContext(ctx context.Context) (*smtp.Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	dialer := &net.Dialer{Timeout: smtpDialTimeout}
 	if c.Security == "tls" {
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: c.Host})
+		conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: c.Host})
 		if err != nil {
 			return nil, fmt.Errorf("tls dial: %w", err)
 		}
-		return smtp.NewClient(conn, c.Host)
+		conn.SetDeadline(time.Now().Add(smtpIOTimeout))
+		client, err := smtp.NewClient(conn, c.Host)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("smtp handshake: %w", err)
+		}
+		return client, nil
 	}
-	client, err := smtp.Dial(addr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
+	}
+	conn.SetDeadline(time.Now().Add(smtpIOTimeout))
+	client, err := smtp.NewClient(conn, c.Host)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("smtp handshake: %w", err)
 	}
 	if c.Security == "starttls" {
 		if err := client.StartTLS(&tls.Config{ServerName: c.Host}); err != nil {
@@ -123,12 +175,11 @@ func (c Config) auth(client *smtp.Client) error {
 }
 
 func (c Config) build(to, subject, body, attachName string, attach []byte) []byte {
-	boundary := "polka-" + fmt.Sprint(time.Now().UnixNano())
+	boundary := randomBoundary()
 	var b strings.Builder
-	enc := mime.QEncoding.Encode
 	fmt.Fprintf(&b, "From: %s\r\n", c.from())
 	fmt.Fprintf(&b, "To: %s\r\n", to)
-	fmt.Fprintf(&b, "Subject: %s\r\n", enc("utf-8", subject))
+	fmt.Fprintf(&b, "Subject: %s\r\n", encodeSubject(subject))
 	b.WriteString("MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", boundary)
 
@@ -143,6 +194,9 @@ func (c Config) build(to, subject, body, attachName string, attach []byte) []byt
 	fmt.Fprintf(&b, "Content-Type: %s; name=%q; name*=utf-8''%s\r\n", attachmentContentType(name), fallback, encoded)
 	b.WriteString("Content-Transfer-Encoding: base64\r\n")
 	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q; filename*=utf-8''%s\r\n\r\n", fallback, encoded)
+	if strings.EqualFold(filepath.Ext(name), ".txt") {
+		attach = NormalizeText(attach)
+	}
 	enc64 := base64.StdEncoding.EncodeToString(attach)
 	for i := 0; i < len(enc64); i += 76 {
 		end := i + 76
@@ -153,6 +207,55 @@ func (c Config) build(to, subject, body, attachName string, attach []byte) []byt
 	}
 	fmt.Fprintf(&b, "\r\n--%s--\r\n", boundary)
 	return []byte(b.String())
+}
+
+// NormalizeText converts a non-UTF-8 TXT attachment to UTF-8. The library
+// reader treats invalid UTF-8 as Windows-1251, so the mail attachment must
+// use the same assumed encoding instead of being labelled UTF-8 verbatim.
+func NormalizeText(data []byte) []byte {
+	if utf8.Valid(data) {
+		return data
+	}
+	if decoded, err := charmap.Windows1251.NewDecoder().Bytes(data); err == nil {
+		return decoded
+	}
+	return data
+}
+
+func randomBoundary() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err == nil {
+		return "polka-" + hex.EncodeToString(b)
+	}
+	return "polka-" + fmt.Sprint(time.Now().UnixNano())
+}
+
+// encodeSubject folds a header into RFC 2047 encoded-words of at most 75
+// characters each, so a long Cyrillic title does not exceed the SMTP line
+// limit and is not split in the middle of a UTF-8 sequence.
+func encodeSubject(s string) string {
+	var words []string
+	var cur []rune
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		words = append(words, mime.BEncoding.Encode("utf-8", string(cur)))
+		cur = cur[:0]
+	}
+	for _, r := range s {
+		cur = append(cur, r)
+		if len(mime.BEncoding.Encode("utf-8", string(cur))) > 75 {
+			cur = cur[:len(cur)-1]
+			flush()
+			cur = append(cur, r)
+		}
+	}
+	flush()
+	if len(words) == 0 {
+		return ""
+	}
+	return strings.Join(words, "\r\n ")
 }
 
 // attachmentContentType returns a real MIME type for the attachment instead

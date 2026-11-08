@@ -23,10 +23,21 @@ func isJXL(d []byte) bool {
 		[]byte{0x00, 0x00, 0x00, 0x0C, 'J', 'X', 'L', ' ', 0x0D, 0x0A, 0x87, 0x0A})
 }
 
+// maxCoverPixels bounds the decoded image; a small compressed JXL can
+// otherwise expand into a multi-gigapixel image.
+const maxCoverPixels = 40_000_000
+
 // jxlToJPEG decodes JXL and re-encodes it as JPEG.
 func jxlToJPEG(d []byte) ([]byte, string, error) {
 	if len(d) > maxCoverSize {
 		return nil, "", fmt.Errorf("jxl: too large")
+	}
+	cfg, err := jpegxl.DecodeConfig(bytes.NewReader(d))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxCoverPixels {
+		return nil, "", fmt.Errorf("jxl: image dimensions too large")
 	}
 	img, err := jpegxl.Decode(bytes.NewReader(d))
 	if err != nil {

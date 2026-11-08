@@ -17,10 +17,15 @@ import (
 type readerCache struct {
 	mu      sync.Mutex
 	entries map[int64]*library.FB2Text
+	sizes   map[int64]int64
+	total   int64
 	order   []int64
 }
 
-const readerCacheSize = 8
+const (
+	readerCacheSize  = 8
+	readerCacheBytes = 256 << 20
+)
 
 func (c *readerCache) get(id int64) *library.FB2Text {
 	c.mu.Lock()
@@ -31,7 +36,11 @@ func (c *readerCache) get(id int64) *library.FB2Text {
 func (c *readerCache) forget(id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, id)
+	if _, ok := c.entries[id]; ok {
+		c.total -= c.sizes[id]
+		delete(c.sizes, id)
+		delete(c.entries, id)
+	}
 	for i, v := range c.order {
 		if v == id {
 			c.order = append(c.order[:i], c.order[i+1:]...)
@@ -40,26 +49,66 @@ func (c *readerCache) forget(id int64) {
 	}
 }
 
+// clear drops every parsed book. Used after a catalog replace, when old ids
+// may refer to completely different files.
+func (c *readerCache) clear() {
+	c.mu.Lock()
+	c.entries = make(map[int64]*library.FB2Text, readerCacheSize)
+	c.sizes = make(map[int64]int64)
+	c.total = 0
+	c.order = nil
+	c.mu.Unlock()
+}
+
 func (c *readerCache) put(id int64, text *library.FB2Text) {
+	size := readerTextSize(text)
+	if size <= 0 || size > readerCacheBytes {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
 		c.entries = make(map[int64]*library.FB2Text, readerCacheSize)
+		c.sizes = make(map[int64]int64)
 	}
 	if _, exists := c.entries[id]; exists {
 		return
 	}
-	for len(c.order) >= readerCacheSize {
-		delete(c.entries, c.order[0])
+	for len(c.order) >= readerCacheSize || (len(c.order) > 0 && c.total+size > readerCacheBytes) {
+		old := c.order[0]
+		c.total -= c.sizes[old]
+		delete(c.sizes, old)
+		delete(c.entries, old)
 		c.order = c.order[1:]
 	}
 	c.entries[id] = text
+	c.sizes[id] = size
+	c.total += size
 	c.order = append(c.order, id)
+}
+
+func readerTextSize(text *library.FB2Text) int64 {
+	if text == nil {
+		return 0
+	}
+	var n int64
+	for _, ch := range text.Chapters {
+		n += int64(len(ch.Title) + len(ch.HTML))
+	}
+	for k, v := range text.Notes {
+		n += int64(len(k) + len(v))
+	}
+	return n
 }
 
 // bookText returns the parsed book (from the cache or from disk).
 func (s *Server) bookText(r *http.Request, bookID int64) (*library.FB2Text, error) {
 	if text := s.reader.get(bookID); text != nil {
+		// A hidden/deleted book must not keep serving chapters from cache.
+		if _, err := s.st.BookFile(r.Context(), bookID); err != nil {
+			s.reader.forget(bookID)
+			return nil, err
+		}
 		return text, nil
 	}
 	f, err := s.st.BookFile(r.Context(), bookID)
@@ -202,7 +251,7 @@ func (s *Server) handleReadImage(w http.ResponseWriter, r *http.Request) {
 	}
 	mime = safeImageMime(mime)
 	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Write(data)
 }
 

@@ -13,7 +13,10 @@ export const saveProgress = (bookId, chapter, position, progress, locator = "") 
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-Polka-Lang": getLang() },
     body: JSON.stringify({ chapter, position, progress, locator }),
-  }).catch(() => {});
+  }).then((res) => {
+    if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+    return res;
+  });
 
 export const deleteProgress = async (bookId) => {
   const res = await fetch(api.buildUrl(`api/v1/read/${bookId}/progress`), {
@@ -34,9 +37,9 @@ export const localProgress = {
       return null;
     }
   },
-  set(bookId, chapter, position) {
+  set(bookId, chapter, position, overall) {
     try {
-      localStorage.setItem(`polka-read-${bookId}`, JSON.stringify({ chapter, position }));
+      localStorage.setItem(`polka-read-${bookId}`, JSON.stringify({ chapter, position, overall }));
     } catch {
       /* quota exceeded — no big deal */
     }
@@ -60,4 +63,7 @@ export const saveReaderPrefs = (prefs) =>
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(prefs),
+  }).then((res) => {
+    if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+    return res;
   });

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 )
 
@@ -28,6 +30,12 @@ func (s *Server) maybeDemo(h http.Handler) http.Handler {
 // cookie is attached both to the response and to the current request.
 func (s *Server) withGuest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Static assets do not need a guest account. Creating one per JS/CSS
+		// request wastes rows and lets a simple page load churn the database.
+		if isStaticAsset(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.currentUser(r) == nil {
 			if !s.guestLimiter.allow(clientIP(r)) {
 				http.Error(w, "too many requests", http.StatusTooManyRequests)
@@ -55,6 +63,27 @@ func (s *Server) withGuest(next http.Handler) http.Handler {
 
 const guestMaxAge = 24 * time.Hour
 
+// isStaticAsset reports requests that are served by the embedded SPA or
+// static file server and therefore never need a demo guest account.
+func isStaticAsset(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	p := r.URL.Path
+	if p == "/" || p == "/index.html" {
+		return false
+	}
+	if strings.HasPrefix(p, "/assets/") {
+		return true
+	}
+	switch strings.ToLower(path.Ext(p)) {
+	case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+		".woff", ".woff2", ".ttf", ".otf", ".webmanifest":
+		return true
+	}
+	return false
+}
+
 // cleanupGuests periodically wipes stale guest accounts together with
 // everything they did (sessions, progress, ratings, lists).
 func (s *Server) cleanupGuests() {
@@ -64,6 +93,7 @@ func (s *Server) cleanupGuests() {
 		if n, err := s.users.CleanupGuests(ctx, guestMaxAge); err != nil {
 			s.log.Warn("guest cleanup", "error", err)
 		} else if n > 0 {
+			s.invalidateBasicCache()
 			s.log.Info("guest cleanup", "removed", n)
 		}
 		cancel()

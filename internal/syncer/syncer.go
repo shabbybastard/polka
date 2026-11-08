@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -126,10 +127,12 @@ type Syncer struct {
 	remote *url.URL
 
 	online   atomic.Bool
+	closing  atomic.Bool
 	lastSync atomic.Value // time.Time
 
 	timerMu   gosync.Mutex
 	syncTimer *time.Timer
+	syncMu    gosync.Mutex
 }
 
 const offlineSchema = `
@@ -171,6 +174,10 @@ func New(dataDir string, cfg Config, users *auth.Service, log *slog.Logger) (*Sy
 		return nil, err
 	}
 
+	// Keep the base URL normalized: request() appends paths directly and a
+	// trailing slash would produce //api/... which ServeMux redirects away,
+	// while this client deliberately does not follow redirects.
+	cfg.Server = strings.TrimRight(cfg.Server, "/")
 	s := &Syncer{
 		cfg:   cfg,
 		log:   log,
@@ -198,7 +205,20 @@ func New(dataDir string, cfg Config, users *auth.Service, log *slog.Logger) (*Sy
 	return s, nil
 }
 
-func (s *Syncer) Close() error { return s.db.Close() }
+func (s *Syncer) Close() error {
+	s.closing.Store(true)
+	s.timerMu.Lock()
+	if s.syncTimer != nil {
+		s.syncTimer.Stop()
+		s.syncTimer = nil
+	}
+	s.timerMu.Unlock()
+	// Wait for a SyncNow that already started, so it cannot use the database
+	// after Close.
+	s.syncMu.Lock()
+	s.syncMu.Unlock()
+	return s.db.Close()
+}
 
 func (s *Syncer) Server() string { return s.cfg.Server }
 
@@ -269,6 +289,15 @@ func (s *Syncer) Run(ctx context.Context) {
 
 // SyncNow performs a two-way state exchange: pull with LWW merge, then push.
 func (s *Syncer) SyncNow(ctx context.Context) error {
+	if s.closing.Load() {
+		return errors.New("syncer is closed")
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.closing.Load() {
+		return errors.New("syncer is closed")
+	}
+
 	ownerID, err := s.ownerID(ctx)
 	if err != nil {
 		return err
@@ -278,6 +307,10 @@ func (s *Syncer) SyncNow(ctx context.Context) error {
 	resp, err := s.request(ctx, http.MethodGet, "/api/v1/sync/state", nil)
 	if err != nil {
 		return fmt.Errorf("pull: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return fmt.Errorf("pull: HTTP %d", resp.StatusCode)
 	}
 	var remote auth.SyncState
 	err = json.NewDecoder(resp.Body).Decode(&remote)
@@ -351,10 +384,12 @@ func (s *Syncer) RequestSync() {
 		s.syncTimer.Stop()
 	}
 	s.syncTimer = time.AfterFunc(syncDebounce, func() {
-		if !s.Online() {
-			return // offline: changes will arrive once connectivity is restored
+		if s.closing.Load() || !s.Online() {
+			return // offline/closed: changes will arrive on reconnect
 		}
-		if err := s.SyncNow(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := s.SyncNow(ctx); err != nil {
 			s.log.Warn("sync after change", "error", err)
 		}
 	})

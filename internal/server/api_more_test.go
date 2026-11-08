@@ -86,6 +86,18 @@ func TestCatalogAndSeriesEndpoints(t *testing.T) {
 		t.Error("unknown image -> 404")
 	}
 
+	rangeReq, _ := http.NewRequest(http.MethodGet, f.ts.URL+"/Images/fb2/"+id, nil)
+	rangeReq.Header.Set("Range", "bytes=0-3")
+	rangeResp, err := c.Do(rangeReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangeBody, _ := io.ReadAll(rangeResp.Body)
+	rangeResp.Body.Close()
+	if rangeResp.StatusCode != http.StatusPartialContent || len(rangeBody) != 4 {
+		t.Errorf("range download: %d, %d bytes", rangeResp.StatusCode, len(rangeBody))
+	}
+
 	for ext, want := range map[string]string{"fb2": "application/x-fictionbook+xml; charset=utf-8", "EPUB": "application/epub+zip",
 		"pdf": "application/pdf", "djvu": "image/vnd.djvu", "txt": "text/plain; charset=utf-8", "mobi": "application/octet-stream"} {
 		if got := contentTypeFor(ext); got != want {

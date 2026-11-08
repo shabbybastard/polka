@@ -62,7 +62,8 @@ mobile reading app.
   encrypted).
 - **Multi-user.** Accounts with admin/reader roles, per-user progress, lists
   and ratings. Or run it fully open on a trusted home network.
-- **Add books from the browser.** Upload fb2 / epub / pdf / txt / mobi / azw3;
+- **Add books from the browser.** Upload fb2 / epub / pdf / txt / mobi / azw3
+  (up to 50 MB per upload request; multi-file uploads share the same limit);
   metadata is extracted automatically and three-level duplicate detection
   (file hash → text hash → fuzzy metadata) keeps your collection clean.
   New FB2 uploads can be queued for background FB2 → EPUB conversion with
@@ -116,7 +117,7 @@ Grab the latest [release](../../releases):
 |----------|--------------|
 | Windows  | `polka-setup-<version>.exe` — installer for the desktop app (server included) |
 | Linux    | `.deb` / `.rpm` packages (amd64, arm64), plus standalone binaries |
-| Raspberry Pi | 64-bit OS → `polka-linux-arm64` (or the arm64 `.deb` / Docker); 32-bit OS → `polka-linux-arm` |
+| Raspberry Pi | 64-bit OS → `polka-linux-arm64` (or the arm64 `.deb` / Docker); 32-bit ARMv7 OS → `polka-linux-arm` |
 | Any      | `polka` server binary — single file, no dependencies |
 
 Run the server directly:
@@ -154,9 +155,12 @@ Book files may sit in plain folders or inside **ZIP or 7z archives** (the
 usual Flibusta layout, e.g. `f.fb2-…​.7z`) — Polka reads them directly, no
 unpacking needed.
 
-Hundreds of thousands of records import in about a minute. Re-importing
-replaces the catalog but **never touches user data** — accounts, progress,
-ratings and lists live in a separate database and survive re-imports.
+Hundreds of thousands of records import in about a minute. To rebuild an
+existing catalog, pass `--replace`: the import is staged first, so a failed
+or interrupted import leaves the previous catalog intact. Accounts always
+survive; progress, ratings and lists are remapped by `LibID`/file path, so
+they stay with the same book. Entries for books that no longer exist are
+dropped.
 
 ## The desktop apps
 
@@ -186,7 +190,7 @@ Point your reading app at `http://your-server:12791/opds` — no converting or
 copying files, the books open straight on the device. Authentication is HTTP
 Basic with your Polka account. The catalog has new books, **browse by author,
 by series, and by genre** (alphabetical), search, and a personal "Reading now"
-feed; downloads work in fb2, zip, epub, and pdf. The admin can turn OPDS on or
+feed; downloads work in fb2, epub, and pdf. The admin can turn OPDS on or
 off and copy the connection address in *Manage → OPDS*.
 
 ## E-ink readers (PocketBook, Kindle, Kobo…)
@@ -217,9 +221,10 @@ Everything has a sensible default. The most useful flags of `polka serve`:
 | `POLKA_TRUST_PROXY` | off | set to `1` when running behind a trusted reverse proxy so `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` are honoured for rate limiting, secure cookies and origin checks. The proxy must preserve the original host or set `X-Forwarded-Host` |
 
 External rating/recommendation sources are configured in the web UI
-(*Manage → External ratings / Similar books*) and are **off by default**
-except local recommendations — nothing is queried without the admin's
-consent. External genre sources are a separate switch and are also off by
+(*Manage → External ratings / Similar books*). LiveLib, Open Library and
+Google Books ratings are enabled by default (Google Books needs an API
+key); FantLab ratings and TasteDive are off. Similar-books FantLab is on by
+default. External genre sources are a separate switch and are off by
 default.
 
 ### Telegram bot (optional)
@@ -235,21 +240,24 @@ POLKA_TELEGRAM_TOKEN=123456:ABC... ./bin/polka serve --library-dir /books
 Link accounts only in *Manage → Users* by filling the numeric Telegram ID.
 There is no self-registration and no linking command in the chat. Every bot
 update re-reads the account, so disabling a user or changing the role takes
-effect immediately. `/stats` and `/status` are admin-only; book uploads are
-admin-only and limited to 50 per hour per user (configurable in
-*Manage → Library*). Its commands are registered in Telegram's menu button
-(the side command list), and each book card is sent as one HTML-formatted
-photo/caption message. The bot shows covers, metadata, Polka ratings, reading
-progress and search results, but it never sends book files. Temporary
-downloads are deleted after ingestion.
+effect immediately. `/stats` and `/status` are admin-only; Telegram book
+uploads are admin-only, limited to 20 MB per file and 50 per hour per user
+(configurable in *Manage → Library*). Its commands are registered in
+Telegram's menu button (the side command list), and each book card is sent
+as one HTML-formatted photo/caption message. The bot shows covers, metadata,
+Polka ratings, reading progress and search results, but it never sends book
+files. Temporary downloads are deleted after ingestion.
 
 ## Tech notes
 
 - Single Go binary; the React frontend is embedded at build time.
 - SQLite (pure-Go driver) with WAL and FTS5 — no database server to run.
+  WAL uses `synchronous=NORMAL`: a power loss can lose the last few
+  transactions, but the database itself stays intact.
 - User data (accounts, sessions, progress, ratings, lists) is stored
-  separately from the catalog and survives re-imports; so do curated
-  collections, which are re-matched against the catalog after every import.
+  separately from the catalog and is remapped by `LibID`/file path after a
+  re-import; data for books that no longer exist is dropped. Curated
+  collections are re-matched against the catalog after every import.
 - Sync between desktop clients and the server is state-based with
   last-write-wins per record. Forgetting reading progress writes a timestamped
   tombstone, so the removal propagates to other devices instead of being
@@ -273,8 +281,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.6`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.6`, and the version for local
+(current: `v0.1.22-fork.7`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.7`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

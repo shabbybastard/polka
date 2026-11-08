@@ -189,6 +189,9 @@ func TestSMTPTooLargeMapping(t *testing.T) {
 	if isSMTPTooLarge(&textproto.Error{Code: 550}) {
 		t.Error("550 must not map to 413")
 	}
+	if isSMTPTooLarge(fmt.Errorf("dial tcp 127.0.0.1:55201: connection refused")) {
+		t.Error("a port/host containing 552 must not map to 413")
+	}
 }
 
 func TestSecretRoundtrip(t *testing.T) {

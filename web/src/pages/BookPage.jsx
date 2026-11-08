@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/api";
 import RatingStars from "../components/RatingStars";
 import RateStars from "../components/RateStars";
-import { fetchBookForm, fetchExternalEnrichment, fetchSimilarBooks } from "../api/fetchBooks";
+import { fetchBookForm, fetchExternalEnrichment, fetchSimilarBooks, saveExternalGenres } from "../api/fetchBooks";
 import Shelf from "../components/Shelf";
 import { deleteBook, forgetBookEnrichment, updateBookEPUB, updateBookMetadata } from "../api/manage";
 import { deleteProgress, fetchProgress, localProgress } from "../api/reader";
@@ -34,6 +34,17 @@ const parseAuthorName = (value) => {
 
 const formatAuthorName = (author) =>
   [author?.last, author?.first, author?.middle].filter(Boolean).join(" ");
+
+// External API responses are untrusted: only http(s) links and images are
+// allowed in the page.
+const safeExternalUrl = (value) => {
+  try {
+    const url = new URL(String(value), window.location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+};
 
 const BookPage = ({ user, sync }) => {
   const { bookId } = useParams();
@@ -90,6 +101,18 @@ const BookPage = ({ user, sync }) => {
   const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(null);
   const [sendState, setSendState] = useState("idle");
   const actionsRef = useRef(null);
+  const enrichSeq = useRef(0);
+  const sendTimer = useRef(null);
+
+  useEffect(() => {
+    setSendState("idle");
+    return () => {
+      clearTimeout(sendTimer.current);
+      sendTimer.current = null;
+      enrichSeq.current++;
+    };
+  }, [bookId]);
+
   const [polkaRating, setPolkaRating] = useState(null); // {rating, count}
   const [userRating, setUserRating] = useState(0);
   const [ratingBusy, setRatingBusy] = useState(false);
@@ -140,11 +163,16 @@ const BookPage = ({ user, sync }) => {
       sendBook(bookId)
         .then(() => {
           setSendState("sent");
-          setTimeout(() => setSendState("idle"), 2500);
+          clearTimeout(sendTimer.current);
+          sendTimer.current = setTimeout(() => setSendState("idle"), 2500);
         })
-        .catch(() => {
+        .catch((err) => {
           setSendState("idle");
-          alert(t("book.send.fail"));
+          if (err?.status === 413) {
+            alert(t("book.send.tooLarge", { size: formatBytes(maxAttachmentBytes) ?? "" }));
+          } else {
+            alert(t("book.send.fail"));
+          }
         });
     if (email !== readerEmail) {
       setReaderEmail(email)
@@ -174,6 +202,9 @@ const BookPage = ({ user, sync }) => {
   const forgetExternal = () => {
     if (forgetExternalBusy || !confirm(t("book.forgetExternalConfirm"))) return;
     setForgetExternalBusy(true);
+    // Any enrichment request started before this click must not re-populate
+    // the data we are about to delete.
+    enrichSeq.current++;
     forgetBookEnrichment(bookId)
       .then(() => {
         // Drop the ratings, links and similar books from the current view.
@@ -318,17 +349,32 @@ const BookPage = ({ user, sync }) => {
     setReadProgress(0);
     setListIds([]);
     fetchProgress(bookId)
-      .then((p) => !cancelled && p?.stored && setReadProgress(Number(p.progress ?? 0)))
-      .catch(() => {});
-    fetchReaderEmail()
-      .then((res) => {
+      .then((p) => {
         if (cancelled) return;
-        setSmtpReady(Boolean(res?.smtpReady));
-        setReaderEmailState(res?.email ?? "");
-        const maxAttachment = Number(res?.maxAttachmentBytes);
-        setMaxAttachmentBytes(Number.isFinite(maxAttachment) ? maxAttachment : null);
+        if (p?.stored) {
+          setReadProgress(Number(p.progress ?? 0));
+          return;
+        }
+        // Public mode has no server-side progress; ReaderPage keeps it in
+        // localStorage, so show that instead of always 0%.
+        const local = localProgress.get(bookId);
+        if (local) setReadProgress(Number(local.overall ?? 0));
       })
       .catch(() => {});
+    const refreshReader = () =>
+      fetchReaderEmail()
+        .then((res) => {
+          if (cancelled) return;
+          setSmtpReady(Boolean(res?.smtpReady));
+          setReaderEmailState(res?.email ?? "");
+          const maxAttachment = Number(res?.maxAttachmentBytes);
+          setMaxAttachmentBytes(Number.isFinite(maxAttachment) ? maxAttachment : null);
+        })
+        .catch(() => {});
+    refreshReader();
+    // SMTP limits can change while the page is open; refresh when the tab
+    // regains focus instead of only when the book id changes.
+    window.addEventListener("focus", refreshReader);
     import("../api/lists").then(({ fetchLists }) =>
       fetchLists()
         .then((res) => {
@@ -340,6 +386,7 @@ const BookPage = ({ user, sync }) => {
     );
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", refreshReader);
     };
   }, [bookId]);
 
@@ -367,15 +414,20 @@ const BookPage = ({ user, sync }) => {
     };
   }, [bookId]);
 
-  useEffect(() => {
-    if (!data?.bookForm?.BookID) return undefined;
-    let cancelled = false;
-
-    const author = data.authors?.[0]
+  const authorForEnrichment = useMemo(() => {
+    if (!data) return "";
+    return data.authors?.[0]
       ? [data.authors[0].LastName, data.authors[0].FirstName, data.authors[0].MiddleName]
           .filter(Boolean)
           .join(" ")
-      : data.bookForm.AuthorsNames || "";
+      : data.bookForm?.AuthorsNames || "";
+  }, [data]);
+
+  useEffect(() => {
+    if (!data?.bookForm?.BookID) return undefined;
+    let cancelled = false;
+    const seq = ++enrichSeq.current;
+    const author = authorForEnrichment;
 
     fetchExternalEnrichment({
       bookId: data.bookForm.BookID,
@@ -384,14 +436,15 @@ const BookPage = ({ user, sync }) => {
       isbn: data.isbn,
     })
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || seq !== enrichSeq.current) return;
         setEnrichment(res ?? null);
-        // The server saves external tags as genres while handling this
-        // request. Pick the new genre list up immediately, like ratings.
-        if (res?.tags?.length) {
-          fetchBookForm({ selectedItemID: bookId })
+        // GET is read-only; persist the tags with an explicit POST, then
+        // pick the new genre list up immediately, like ratings.
+        if (res?.tags?.length && user?.role === "admin") {
+          saveExternalGenres(bookId)
+            .then(() => fetchBookForm({ selectedItemID: bookId }))
             .then((form) => {
-              if (cancelled || !form?.bookForm) return;
+              if (cancelled || seq !== enrichSeq.current || !form?.bookForm) return;
               setData((prev) =>
                 prev
                   ? {
@@ -416,13 +469,13 @@ const BookPage = ({ user, sync }) => {
       title: data.bookForm.Title,
       author,
     })
-      .then((res) => !cancelled && setSimilar(res ?? null))
-      .catch(() => !cancelled && setSimilar(null));
+      .then((res) => !cancelled && seq === enrichSeq.current && setSimilar(res ?? null))
+      .catch(() => !cancelled && seq === enrichSeq.current && setSimilar(null));
 
     return () => {
       cancelled = true;
     };
-  }, [data?.bookForm?.BookID, data?.bookForm?.Title, data?.bookForm?.AuthorsNames, data?.isbn]);
+  }, [data?.bookForm?.BookID, data?.bookForm?.Title, authorForEnrichment, data?.isbn, user?.id]);
 
   const authorsLine = useMemo(() => {
     if (!data?.authors?.length) return data?.bookForm?.AuthorsNames ?? "";
@@ -443,6 +496,10 @@ const BookPage = ({ user, sync }) => {
   useLayoutEffect(() => {
     const root = actionsRef.current;
     if (!root) return;
+    // Measure the intrinsic label width, not the width we applied on the
+    // previous render. Without this reset each render grew the buttons by
+    // a couple of pixels (scrollWidth includes the fixed width + border).
+    root.style.removeProperty("--book-action-width");
     let widest = 0;
     root
       .querySelectorAll(
@@ -451,7 +508,12 @@ const BookPage = ({ user, sync }) => {
       .forEach((el) => {
         widest = Math.max(widest, el.scrollWidth);
       });
-    if (widest > 0) root.style.setProperty("--book-action-width", `${Math.ceil(widest) + 4}px`);
+    if (widest > 0) {
+      const target = `${Math.ceil(widest) + 4}px`;
+      if (root.style.getPropertyValue("--book-action-width") !== target) {
+        root.style.setProperty("--book-action-width", target);
+      }
+    }
   });
 
   if (loading) {
@@ -501,7 +563,7 @@ const BookPage = ({ user, sync }) => {
   };
 
   const primary = enrichment?.primary ?? null;
-  const externalCoverUrl = primary?.coverUrl ?? enrichment?.coverUrl;
+  const externalCoverUrl = safeExternalUrl(primary?.coverUrl ?? enrichment?.coverUrl);
   const externalRatings = (enrichment?.sources ?? []).filter(
     (source) => Number(source.rating) > 0
   );
@@ -598,8 +660,8 @@ const BookPage = ({ user, sync }) => {
                     key={source.source}
                   >
                     <span className="book-page__rating-source">
-                      {source.infoUrl ? (
-                        <a href={source.infoUrl} target="_blank" rel="noreferrer">
+                      {safeExternalUrl(source.infoUrl) ? (
+                        <a href={safeExternalUrl(source.infoUrl)} target="_blank" rel="noreferrer">
                           {SOURCE_LABELS[source.source] ?? source.source}
                         </a>
                       ) : (
@@ -717,9 +779,6 @@ const BookPage = ({ user, sync }) => {
             <div className="book-page__actions-row book-page__actions-row--downloads">
               <a className="btn btn-ghost" href={api.fb2Url(BookID)}>
                 {t("book.download", { ext: Ext || ".fb2" })}
-              </a>
-              <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
-                {t("book.downloadZip")}
               </a>
               {canCompact && (
                 <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>

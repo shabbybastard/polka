@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import BookCard from "../components/BookCard";
 import {
   createList,
@@ -19,6 +19,12 @@ const ListsPage = () => {
   const [nextOffset, setNextOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [newName, setNewName] = useState("");
+  const activeRef = useRef(null);
+  const loadingMore = useRef(false);
+
+  useEffect(() => {
+    activeRef.current = activeId;
+  }, [activeId]);
 
   const reloadLists = useCallback(
     (keepActive = true) =>
@@ -60,11 +66,20 @@ const ListsPage = () => {
   }, [activeId]);
 
   const loadMore = () => {
-    fetchListBooks(activeId, { offset: nextOffset }).then((res) => {
-      setBooks((prev) => [...prev, ...(res.titlesList ?? [])]);
-      setHasMore(Boolean(res.hasMore));
-      setNextOffset(Number(res.nextOffset ?? nextOffset));
-    });
+    if (loadingMore.current || !activeId) return;
+    loadingMore.current = true;
+    const requested = activeId;
+    fetchListBooks(activeId, { offset: nextOffset })
+      .then((res) => {
+        if (activeRef.current !== requested) return;
+        setBooks((prev) => [...prev, ...(res.titlesList ?? [])]);
+        setHasMore(Boolean(res.hasMore));
+        setNextOffset(Number(res.nextOffset ?? nextOffset));
+      })
+      .catch(() => {})
+      .finally(() => {
+        loadingMore.current = false;
+      });
   };
 
   const active = lists?.find((l) => l.id === activeId);

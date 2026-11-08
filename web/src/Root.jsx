@@ -53,6 +53,15 @@ const Root = () => {
     if (!authRequired || user) loadConfig();
   }, [authChecked, authRequired, user, loadConfig]);
 
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser((prev) => (prev ? null : prev));
+      setConfig(null);
+    };
+    window.addEventListener("polka-unauthorized", onUnauthorized);
+    return () => window.removeEventListener("polka-unauthorized", onUnauthorized);
+  }, []);
+
   const handleLogout = () => {
     logout().finally(() => {
       setUser(null);
@@ -110,7 +119,7 @@ const Root = () => {
         <Route
           path="/admin/library"
           element={
-            user?.role === "admin" ? layout(<AdminLibraryPage me={user} onConfigChange={loadConfig} />) : <Navigate to="/" replace />
+            user?.role === "admin" ? layout(<AdminLibraryPage me={user} desktop={isDesktop} onConfigChange={loadConfig} />) : <Navigate to="/" replace />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

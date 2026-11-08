@@ -530,8 +530,8 @@ func parseBinaries(fb2 []byte) ([]imageFile, map[string]string, error) {
 				mimeType = a.Value
 			}
 		}
-		var b64 string
-		if err := dec.DecodeElement(&b64, &start); err != nil {
+		b64, err := library.ReadElementTextLimited(dec, start, library.MaxBinaryB64)
+		if err != nil {
 			return nil, nil, fmt.Errorf("read fb2 binary %q: %w", id, err)
 		}
 		data, err := base64.StdEncoding.DecodeString(removeWhitespace(b64))

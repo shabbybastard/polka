@@ -46,6 +46,8 @@ type basicCache struct {
 
 type basicEntry struct {
 	user    *auth.User
+	login   string
+	hash    string
 	expires time.Time
 }
 
@@ -56,19 +58,37 @@ func (s *Server) basicUser(r *http.Request, login, password string) *auth.User {
 	key := hex.EncodeToString(sum[:])
 
 	s.basic.mu.Lock()
-	if e, ok := s.basic.entries[key]; ok && time.Now().Before(e.expires) {
-		s.basic.mu.Unlock()
-		// Re-read the disabled flag so a revoked account loses access
-		// immediately instead of lingering until the cache expires.
-		if fresh, err := s.users.GetByID(r.Context(), e.user.ID); err == nil && !fresh.Disabled {
-			return fresh
+	e, ok := s.basic.entries[key]
+	s.basic.mu.Unlock()
+	if ok && time.Now().Before(e.expires) {
+		// Re-read the account so a revoked, deleted or recreated user loses
+		// access immediately. Comparing login and password hash also covers
+		// a password change made by another process (`polka passwd`).
+		fresh, err := s.users.GetByID(r.Context(), e.user.ID)
+		if err == nil && !fresh.Disabled && fresh.Login == login {
+			if fresh.PasswordHash == e.hash {
+				return fresh
+			}
+			// Hash changed (for example via `polka passwd`): drop the stale
+			// entry and fall through to Verify with the presented password.
 		}
+		s.basic.mu.Lock()
+		delete(s.basic.entries, key)
+		s.basic.mu.Unlock()
+		if err != nil || fresh == nil || fresh.Disabled || fresh.Login != login {
+			return nil
+		}
+	}
+
+	// Basic auth is unauthenticated, so cap failed attempts per IP. The
+	// limiter only records failures; successful OPDS clients are unaffected.
+	ip := clientIP(r)
+	if s.basicLimiter.blocked(ip) {
 		return nil
 	}
-	s.basic.mu.Unlock()
-
 	u, err := s.users.Verify(r.Context(), login, password)
 	if err != nil {
+		s.basicLimiter.allow(ip)
 		return nil
 	}
 
@@ -80,7 +100,7 @@ func (s *Server) basicUser(r *http.Request, login, password string) *auth.User {
 		s.basic.mu.Unlock()
 		return u
 	}
-	s.basic.entries[key] = basicEntry{user: u, expires: time.Now().Add(basicCacheTTL)}
+	s.basic.entries[key] = basicEntry{user: u, login: u.Login, hash: u.PasswordHash, expires: time.Now().Add(basicCacheTTL)}
 	s.basic.mu.Unlock()
 	return u
 }
@@ -183,6 +203,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, err)
 		return
 	}
+	s.loginLimiter.reset(clientIP(r))
 	s.setSessionCookie(w, r, token, int((7 * 24 * time.Hour).Seconds()))
 	writeJSON(w, map[string]any{"user": userJSON(u)})
 }
@@ -266,6 +287,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		s.authAdminError(w, err)
 		return
 	}
+	s.invalidateBasicCache()
 	writeJSON(w, map[string]any{"user": s.adminUserJSON(r, u)})
 }
 
@@ -289,32 +311,14 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		readerEmail = &email
 	}
-	if req.TelegramID != nil {
-		if err := s.users.SetTelegramID(r.Context(), id, *req.TelegramID); err != nil {
-			s.authAdminError(w, err)
-			return
-		}
-	}
-	if err := s.users.UpdateUser(r.Context(), id, req.Password, req.DisplayName, req.Role, req.Disabled); err != nil {
+	u, err := s.users.UpdateUserFull(r.Context(), id, req.Password, req.DisplayName, req.Role, req.Disabled, req.TelegramID, readerEmail)
+	if err != nil {
 		s.authAdminError(w, err)
 		return
 	}
-	if req.Password != nil {
-		// A password change invalidates the cached Basic credentials:
-		// the cached user must not outlive its password.
-		s.invalidateBasicCache()
-	}
-	if readerEmail != nil {
-		if err := s.setReaderEmail(r.Context(), id, *readerEmail); err != nil {
-			s.apiError(w, err)
-			return
-		}
-	}
-	u, err := s.users.GetByID(r.Context(), id)
-	if err != nil {
-		s.apiError(w, err)
-		return
-	}
+	// Role/disabled/reader changes and deleted accounts must not be served
+	// from the old Basic cache either.
+	s.invalidateBasicCache()
 	writeJSON(w, map[string]any{"user": s.adminUserJSON(r, u)})
 }
 
@@ -328,6 +332,7 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		s.authAdminError(w, err)
 		return
 	}
+	s.invalidateBasicCache()
 	writeJSON(w, map[string]any{"ok": true})
 }
 

@@ -77,7 +77,18 @@ func ParseFB2Text(r io.Reader, imgURL func(id string) string) (*FB2Text, error) 
 
 type fb2Converter struct {
 	imgURL func(string) string
+	depth  int
 }
+
+func (c *fb2Converter) enter() error {
+	c.depth++
+	if c.depth > maxXMLDepth {
+		return fmt.Errorf("fb2 XML nesting exceeds %d", maxXMLDepth)
+	}
+	return nil
+}
+
+func (c *fb2Converter) leave() { c.depth-- }
 
 func attrValue(e xml.StartElement, name string) string {
 	for _, a := range e.Attr {
@@ -153,6 +164,10 @@ func (c *fb2Converter) parseMainBody(dec *xml.Decoder, res *FB2Text) error {
 // convertSectionSplit parses a top-level section, returning its own
 // content and its first-level nested sections separately.
 func (c *fb2Converter) convertSectionSplit(dec *xml.Decoder) (string, string, []FB2Chapter, error) {
+	if err := c.enter(); err != nil {
+		return "", "", nil, err
+	}
+	defer c.leave()
 	var title string
 	var own strings.Builder
 	var subs []FB2Chapter
@@ -225,6 +240,10 @@ func (c *fb2Converter) parseNotesBody(dec *xml.Decoder, res *FB2Text) error {
 // convertSection reads a section to its end; returns the title (as text)
 // and the content HTML. Nested sections are merged in with subheadings.
 func (c *fb2Converter) convertSection(dec *xml.Decoder) (string, string, error) {
+	if err := c.enter(); err != nil {
+		return "", "", err
+	}
+	defer c.leave()
 	var title string
 	var sb strings.Builder
 	for {
@@ -390,6 +409,10 @@ func (c *fb2Converter) convertElement(dec *xml.Decoder, start xml.StartElement, 
 
 // convertChildren processes the current element's subtree until its end.
 func (c *fb2Converter) convertChildren(dec *xml.Decoder, sb *strings.Builder) error {
+	if err := c.enter(); err != nil {
+		return err
+	}
+	defer c.leave()
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -475,14 +498,17 @@ func ExtractBinary(r io.Reader, id string) ([]byte, string, error) {
 			continue
 		}
 		ctype := attrValue(start, "content-type")
-		var b64 string
-		if err := dec.DecodeElement(&b64, &start); err != nil {
+		b64, err := ReadElementTextLimited(dec, start, maxBinaryB64)
+		if errors.Is(err, ErrBinaryTooLarge) {
+			// The image is beyond the size bound; the book itself is still
+			// readable, so treat it as missing rather than failing the request.
+			continue
+		}
+		if err != nil {
 			return nil, "", err
 		}
 		data, err := decodeBase64(b64)
 		if errors.Is(err, ErrBinaryTooLarge) {
-			// The image is beyond the size bound; the book itself is still
-			// readable, so treat it as missing rather than failing the request.
 			continue
 		}
 		if err != nil {

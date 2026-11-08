@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const livelibHTML = `<html><body>
@@ -305,6 +306,23 @@ func TestGoogleBooksSkippedWithoutKey(t *testing.T) {
 	}
 }
 
+func TestEnrichBackoffSkipMarksPartial(t *testing.T) {
+	p := newTestProvider(t, true, true, true)
+	p.mu.Lock()
+	p.backoff[SourceLiveLib] = time.Now().Add(time.Hour)
+	p.mu.Unlock()
+	res := p.Get(context.Background(), "partial-backoff", "Мастер и Маргарита", "Булгаков", allEnabled(), allTagSources())
+	if res.Negative || len(res.Sources) == 0 {
+		t.Fatalf("expected results from available sources: %+v", res)
+	}
+	p.mu.Lock()
+	entry, ok := p.cache["partial-backoff"]
+	p.mu.Unlock()
+	if !ok || !entry.Partial {
+		t.Fatalf("backoff-skipped source must make the cache entry partial: %+v", entry)
+	}
+}
+
 func TestEnrichTransientNotCached(t *testing.T) {
 	p := newTestProvider(t, false, false, false)
 	res := p.Get(context.Background(), "3", "Книга", "", allEnabled(), allTagSources())
@@ -331,6 +349,24 @@ func TestEnrichCachePersistence(t *testing.T) {
 	res := p2.Get(context.Background(), "5", "Мастер и Маргарита", "", allEnabled(), allTagSources())
 	if res.Primary == nil || res.Primary.Rating != 4.5 {
 		t.Errorf("cached result = %+v", res.Primary)
+	}
+}
+
+func TestEnrichCacheJournalReplay(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "cache.json")
+	p := newTestProvider(t, true, true, true)
+	p.cachePath = cachePath
+	p.Get(context.Background(), "j1", "Мастер и Маргарита", "", allEnabled(), allTagSources())
+	p.Get(context.Background(), "j2", "Мастер и Маргарита", "", allEnabled(), allTagSources())
+
+	p2 := New(cachePath)
+	p2.SetGoogleAPIKey("test-key")
+	p2.LiveLibBase = "http://127.0.0.1:1"
+	p2.GoogleBase = "http://127.0.0.1:1"
+	p2.OpenLibraryBase = "http://127.0.0.1:1"
+	if res := p2.Get(context.Background(), "j2", "Мастер и Маргарита", "", allEnabled(), allTagSources()); res.Primary == nil {
+		t.Errorf("journal entry was not replayed: %+v", res)
 	}
 }
 

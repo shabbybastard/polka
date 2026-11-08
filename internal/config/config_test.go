@@ -67,6 +67,9 @@ func TestLoadExtraFlagsAndErrors(t *testing.T) {
 	if err != nil || !replace || inpx != "x.inpx" || len(rest) != 1 {
 		t.Errorf("extra flags: %v %v %q %v", err, replace, inpx, rest)
 	}
+	if _, _, err := Load([]string{"--auth", "publik"}, nil); err == nil || !strings.Contains(err.Error(), "invalid --auth") {
+		t.Errorf("invalid auth mode: %v", err)
+	}
 	if _, _, err := Load([]string{"--no-such-flag"}, nil); err == nil {
 		t.Error("unknown flag must be an error")
 	}

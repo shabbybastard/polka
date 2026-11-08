@@ -49,9 +49,11 @@ const RATING_STATUS_DISMISSED_KEY = "polka-rating-status-dismissed";
 const conversionSignature = (jobs) =>
   jobs?.length ? `${jobs[0].id}:${jobs[0].updatedAt ?? ""}` : "";
 
-const AdminLibraryPage = ({ onConfigChange, me }) => {
+const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ["books", "import", "collections", "sources", "users", "readers", "appearance"];
+  const VALID_TABS = desktop
+    ? ["books", "import", "collections", "sources", "readers", "appearance"]
+    : ["books", "import", "collections", "sources", "users", "readers", "appearance"];
   const tab = VALID_TABS.includes(searchParams.get("tab")) ? searchParams.get("tab") : "books";
   const selectTab = (id) => setSearchParams(id === "books" ? {} : { tab: id }, { replace: true });
   // --- Book upload ---
@@ -172,7 +174,12 @@ const AdminLibraryPage = ({ onConfigChange, me }) => {
     importStatus()
       .then((st) => {
         setStatus(st);
-        if (st.running) setImportStatusHidden(false);
+        if (st.running) {
+          setImportStatusHidden(false);
+          // A page reload during an import must resume polling too, not just
+          // the initial startImport call.
+          if (!polling.current) polling.current = setInterval(refreshStatus, 1000);
+        }
         if (!st.running && polling.current) {
           clearInterval(polling.current);
           polling.current = null;
@@ -194,7 +201,7 @@ const AdminLibraryPage = ({ onConfigChange, me }) => {
         setInpxFile(null);
         setInpxPath("");
         refreshStatus();
-        polling.current = setInterval(refreshStatus, 1000);
+        if (!polling.current) polling.current = setInterval(refreshStatus, 1000);
       })
       .catch((err) => {
         alert(err.status === 409 ? t("admin.import.conflict") : t("admin.import.fail"));
@@ -564,7 +571,7 @@ const AdminLibraryPage = ({ onConfigChange, me }) => {
           { id: "import", label: t("admin.tab.import") },
           { id: "collections", label: t("admin.tab.collections") },
           { id: "sources", label: t("admin.tab.sources") },
-          { id: "users", label: t("admin.tab.users") },
+          ...(desktop ? [] : [{ id: "users", label: t("admin.tab.users") }]),
           { id: "readers", label: t("admin.tab.readers") },
           { id: "appearance", label: t("admin.tab.appearance") },
         ].map((tb) => (
@@ -1281,13 +1288,13 @@ const AdminLibraryPage = ({ onConfigChange, me }) => {
               <input
                 type="number"
                 min="1"
-                step="1"
+                step="0.1"
                 aria-label={t("admin.smtp.maxMessageMiB")}
                 title={t("admin.smtp.maxMessageMiB")}
                 placeholder={t("admin.smtp.maxMessageMiB")}
                 value={
                   smtp.maxMessageBytes
-                    ? Math.round(Number(smtp.maxMessageBytes) / (1024 * 1024))
+                    ? Number((Number(smtp.maxMessageBytes) / (1024 * 1024)).toFixed(2))
                     : ""
                 }
                 onChange={(e) => {

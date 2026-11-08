@@ -25,27 +25,30 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Config
-	log        *slog.Logger
-	st         *store.Store
-	lib        *library.Library // nil if library-dir is not set
-	users      *auth.Service
-	desktop    *auth.User     // non-nil in desktop mode: owner auto-login
-	sync       *syncer.Syncer // non-nil in server synchronization mode
-	enrich     *enrich.Provider
-	cols       *collections.Service // book collections (collections.db)
-	conv       *conversions.Store   // background FB2 -> EPUB queue
-	srcs       sourcesState         // external collection sources sync
-	imp        importState          // state of the background inpx web import
-	genreSync  genreSyncState       // background external genre loading
-	ratingSync ratingSyncState      // manual external rating cache warming
-	reader     readerCache          // parsed books for online reading
-	basic      basicCache           // verified Basic credentials (OPDS)
-	genres     genreCache           // genre counters for search
-	startedAt  time.Time            // server uptime for diagnostics
+	cfg         *config.Config
+	log         *slog.Logger
+	st          *store.Store
+	lib         *library.Library // nil if library-dir is not set
+	users       *auth.Service
+	desktop     *auth.User     // non-nil in desktop mode: owner auto-login
+	sync        *syncer.Syncer // non-nil in server synchronization mode
+	enrich      *enrich.Provider
+	cols        *collections.Service // book collections (collections.db)
+	conv        *conversions.Store   // background FB2 -> EPUB queue
+	srcs        sourcesState         // external collection sources sync
+	imp         importState          // state of the background inpx web import
+	genreSync   genreSyncState       // background external genre loading
+	ratingSync  ratingSyncState      // manual external rating cache warming
+	reader      readerCache          // parsed books for online reading
+	basic       basicCache           // verified Basic credentials (OPDS)
+	genres      genreCache           // genre counters for search
+	searchStats searchStatsCache     // short-lived FTS counts
+	startedAt   time.Time            // server uptime for diagnostics
 
 	loginLimiter *rateLimiter // throttle password guessing
+	basicLimiter *rateLimiter // throttle failed Basic/OPDS attempts per IP
 	guestLimiter *rateLimiter // throttle demo guest creation
+	sendLimiter  *rateLimiter // throttle send-to-reader e-mails per user
 	secret       []byte       // key for secrets at rest (SMTP password)
 }
 
@@ -54,17 +57,53 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 	return httpSrv
 }
 
+// PrepareCatalogRemap applies an interrupted re-import remap before the HTTP
+// server starts. Callers that want fail-closed startup must handle its error.
+func PrepareCatalogRemap(ctx context.Context, st *store.Store, users *auth.Service) error {
+	generation, err := st.CatalogGeneration(ctx)
+	if err != nil {
+		return err
+	}
+	pending, err := users.HasPendingRemap(ctx)
+	if err != nil || !pending {
+		return err
+	}
+	return users.ApplyPendingRemap(ctx, generation)
+}
+
+// Close flushes buffered, non-critical caches. It is safe to call once during
+// graceful shutdown, after the HTTP server has stopped.
+func (s *Server) Close() {
+	if s.enrich != nil {
+		s.enrich.Flush()
+	}
+}
+
 // NewWithApp also exposes the internal server for optional integrations
 // (the Telegram bot) while New keeps the historical HTTP-only signature.
 func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Library, users *auth.Service, sync *syncer.Syncer, webFS fs.FS) (*http.Server, *Server) {
+	secret, secretErr := loadSecretKey(cfg.DataDir)
 	s := &Server{
 		cfg: cfg, log: log, st: st, lib: lib, users: users, sync: sync,
 		startedAt: time.Now(),
 		enrich:    enrich.New(filepath.Join(cfg.DataDir, "enrichment.json")),
-		// 10 failed logins / 5 min / IP; 20 new guests / min / IP.
+		// 10 failed logins / 5 min / IP; 60 failed Basic attempts / 5 min / IP;
+		// 20 new guests / min / IP. Basic is only incremented on failures, so
+		// normal OPDS clients that authenticate successfully are not limited.
 		loginLimiter: newRateLimiter(10, 5*time.Minute),
+		basicLimiter: newRateLimiter(60, 5*time.Minute),
 		guestLimiter: newRateLimiter(20, time.Minute),
-		secret:       loadSecretKey(cfg.DataDir),
+		sendLimiter:  newRateLimiter(20, time.Hour),
+		secret:       secret,
+	}
+	if secretErr != nil {
+		log.Error("secret key", "error", secretErr)
+	}
+	// Complete a remap that was interrupted after the catalog swap.
+	if generation, err := st.CatalogGeneration(context.Background()); err != nil {
+		log.Warn("catalog generation", "error", err)
+	} else if err := users.ApplyPendingRemap(context.Background(), generation); err != nil {
+		log.Error("pending book remap", "error", err)
 	}
 	if cfg.DataDir == "" {
 		// tests without a data directory: collections are unavailable
@@ -233,7 +272,6 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 		// Covers and book files
 		mux.HandleFunc("GET /Images/covers/{id}", s.protected(s.handleCover))
 		mux.HandleFunc("GET /Images/fb2/{id}", s.protected(s.handleBookDownload))
-		mux.HandleFunc("GET /Images/zip/{id}", s.protected(s.handleBookZip))
 		mux.HandleFunc("GET /Images/fb2compact/{id}", s.protected(s.handleBookCompact))
 
 		// Settings (administrator only)
@@ -261,6 +299,7 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 	mux.HandleFunc("GET /api/v1/me/reader-email", s.protected(s.handleReaderEmail))
 	mux.HandleFunc("POST /api/v1/me/reader-email", s.protected(s.handleReaderEmail))
 	mux.HandleFunc("POST /api/v1/books/{id}/send", s.protected(s.handleSendBook))
+	mux.HandleFunc("POST /api/v1/books/{id}/external-genres", s.adminOnly(s.handleSaveExternalGenres))
 
 	// Reading lists are local in every mode
 	mux.HandleFunc("GET /api/v1/lists", s.protected(s.handleListsGet))
@@ -278,6 +317,9 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 		Addr:              cfg.Addr,
 		Handler:           securityHeaders(s.logRequests(s.originCheck(s.maybeDemo(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute, // large uploads, but still bounded
+		WriteTimeout:      30 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}, s
 }
 
@@ -294,11 +336,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	w.Write(append(data, '\n'))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -308,7 +353,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	count, err := s.st.BookCount(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.log.Error("config book count", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]any{
@@ -340,24 +386,28 @@ func requestHost(r *http.Request) string {
 	return r.Host
 }
 
-// originCheck is a defense-in-depth CSRF mitigation: for cookie-authenticated
-// state-changing requests, verify that Origin/Referer matches the host.
+// originCheck is a defense-in-depth CSRF mitigation for every state-changing
+// request, not only cookie-authenticated ones. In desktop mode there is no
+// session cookie (every request is the owner), so the previous cookie-only
+// check left the whole local API open to cross-site POSTs. Non-browser
+// clients (OPDS/kosync) normally send neither Origin nor Referer and are
+// still allowed; browsers send Origin on cross-site POSTs.
 func (s *Server) originCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-			if _, err := r.Cookie(sessionCookie); err == nil {
-				host := requestHost(r)
-				if origin := r.Header.Get("Origin"); origin != "" {
-					if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Host, host) {
-						http.Error(w, "forbidden", http.StatusForbidden)
-						return
-					}
-				} else if ref := r.Header.Get("Referer"); ref != "" {
-					if u, err := url.Parse(ref); err != nil || !strings.EqualFold(u.Host, host) {
-						http.Error(w, "forbidden", http.StatusForbidden)
-						return
-					}
+			host := requestHost(r)
+			origin := r.Header.Get("Origin")
+			referer := r.Header.Get("Referer")
+			if origin != "" {
+				if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Host, host) {
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
+				}
+			} else if referer != "" {
+				if u, err := url.Parse(referer); err != nil || !strings.EqualFold(u.Host, host) {
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
 				}
 			}
 		}
@@ -370,6 +420,13 @@ func (s *Server) originCheck(next http.Handler) http.Handler {
 func spaHandler(webFS fs.FS) http.Handler {
 	fileServer := http.FileServerFS(webFS)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Media endpoints are handled by explicit mux routes; an unknown one is
+		// a missing file, not a client-side route. Returning index.html here
+		// used to make removed downloads look like HTML books.
+		if strings.HasPrefix(r.URL.Path, "/Images/") {
+			http.NotFound(w, r)
+			return
+		}
 		if r.URL.Path != "/" {
 			if _, err := fs.Stat(webFS, r.URL.Path[1:]); err == nil {
 				fileServer.ServeHTTP(w, r)

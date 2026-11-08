@@ -55,6 +55,11 @@ func Load(args []string, extra func(*flag.FlagSet)) (*Config, []string, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}
+	switch cfg.Auth {
+	case "required", "public", "demo", "desktop":
+	default:
+		return nil, nil, fmt.Errorf("invalid --auth %q: use required, public, demo or desktop", cfg.Auth)
+	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create data dir %q: %w (set --data-dir or POLKA_DATA_DIR to a writable path)", cfg.DataDir, err)

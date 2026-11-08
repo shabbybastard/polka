@@ -145,14 +145,31 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "set your reader e-mail first", http.StatusBadRequest)
 		return
 	}
+	if !s.sendLimiter.allow(fmt.Sprintf("user:%d", u.ID)) {
+		http.Error(w, "too many e-mails, try again later", http.StatusTooManyRequests)
+		return
+	}
 	bookID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	if s.lib == nil {
+		http.Error(w, "library dir is not configured", http.StatusNotFound)
+		return
+	}
 	f, err := s.st.BookFile(r.Context(), bookID)
 	if err != nil {
 		s.apiError(w, err)
+		return
+	}
+	maxAttachment := s.smtpMaxAttachmentBytes(r)
+	if maxAttachment <= 0 || (f.Size > 0 && f.Size > maxAttachment) {
+		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if probe, err := s.lib.EntrySize(f.Folder, f.File, f.Ext); err == nil && probe > maxAttachment {
+		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
 		return
 	}
 	rc, size, err := s.lib.Open(f.Folder, f.File, f.Ext)
@@ -161,8 +178,7 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rc.Close()
-	maxAttachment := s.smtpMaxAttachmentBytes(r)
-	if maxAttachment <= 0 || size > maxAttachment {
+	if size > maxAttachment {
 		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -171,19 +187,25 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, err)
 		return
 	}
+	if strings.EqualFold(f.Ext, "txt") {
+		data = mailer.NormalizeText(data)
+	}
 	if int64(len(data)) > maxAttachment {
 		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
 		return
 	}
 
-	d, _ := s.st.BookDetails(r.Context(), bookID)
+	d, err := s.st.BookDetails(r.Context(), bookID)
+	if err != nil {
+		s.log.Warn("send book details", "book", bookID, "error", err)
+	}
 	title := f.File
 	if d != nil && d.Title != "" {
 		title = d.Title
 	}
 	name := sanitizeFileName(title) + "." + f.Ext
 	cfg := s.smtpConfig(r)
-	if err := cfg.Send(to, title, "Polka — "+title, name, data); err != nil {
+	if err := cfg.SendContext(r.Context(), to, title, "Polka — "+title, name, data); err != nil {
 		s.log.Warn("send book", "book", bookID, "error", err)
 		if isSMTPTooLarge(err) {
 			http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
@@ -200,15 +222,12 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 // maximum") to the HTTP 413 we return for oversized books.
 func isSMTPTooLarge(err error) bool {
 	var protoErr *textproto.Error
-	if errors.As(err, &protoErr) && protoErr.Code == 552 {
-		return true
-	}
-	return strings.Contains(err.Error(), "552")
+	return errors.As(err, &protoErr) && protoErr.Code == 552
 }
 
 // POST /admin/smtp/test — verify the SMTP connection (admin only).
 func (s *Server) handleSmtpTest(w http.ResponseWriter, r *http.Request) {
-	if err := s.smtpConfig(r).Verify(); err != nil {
+	if err := s.smtpConfig(r).VerifyContext(r.Context()); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -283,10 +302,13 @@ func (s *Server) saveSmtpSettings(r *http.Request, in smtpInput) error {
 	}
 	if in.MaxMessageBytes != nil {
 		v := *in.MaxMessageBytes
-		if v <= 0 {
-			v = 0
+		raw := ""
+		if v > 0 {
+			raw = strconv.FormatInt(v, 10)
 		}
-		if err := set("max_message_bytes", strconv.FormatInt(v, 10)); err != nil {
+		// An empty value means "use the 14 MiB default"; storing "0" made
+		// the admin panel show 14 MiB while the saved value was not applied.
+		if err := set("max_message_bytes", raw); err != nil {
 			return err
 		}
 	}

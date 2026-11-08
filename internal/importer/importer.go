@@ -4,7 +4,9 @@ package importer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/shabbybastard/polka/internal/inpx"
 	"github.com/shabbybastard/polka/internal/store"
@@ -65,6 +67,72 @@ func ImportInpx(ctx context.Context, log *slog.Logger, st *store.Store, path str
 		onProgress("indexing", processed)
 	}
 	return session.Finish()
+}
+
+// ReplaceHooks lets the caller remap external user data after the catalog
+// has been swapped. AfterReplace receives the old and new id->key maps.
+type ReplaceHooks struct {
+	// BeforeReplace runs after staging import but before the live catalog is
+	// touched. It can persist the future remap for crash recovery.
+	BeforeReplace func(oldKeys, newKeys map[int64]string) error
+	AfterReplace  func(oldKeys, newKeys map[int64]string) error
+}
+
+// ReplaceInpx imports an inpx into a fresh staging database and only then
+// atomically swaps it into target. A malformed file, a crash during the
+// import or an abort therefore leaves the live catalog untouched.
+func ReplaceInpx(ctx context.Context, log *slog.Logger, target *store.Store, inpxPath, dataDir string, onProgress Progress, hooks ReplaceHooks) (store.ImportStats, error) {
+	var stats store.ImportStats
+	oldKeys, err := target.BookKeys(ctx)
+	if err != nil {
+		return stats, err
+	}
+	if dataDir == "" {
+		dataDir = os.TempDir()
+	}
+	tmp, err := os.CreateTemp(dataDir, "polka-import-*.db")
+	if err != nil {
+		return stats, fmt.Errorf("create staging database: %w", err)
+	}
+	stagingPath := tmp.Name()
+	tmp.Close()
+	cleanup := func() {
+		os.Remove(stagingPath)
+		os.Remove(stagingPath + "-wal")
+		os.Remove(stagingPath + "-shm")
+	}
+	defer cleanup()
+
+	staging, err := store.Open(stagingPath)
+	if err != nil {
+		return stats, fmt.Errorf("open staging database: %w", err)
+	}
+	stats, err = ImportInpx(ctx, log, staging, inpxPath, onProgress)
+	var newKeys map[int64]string
+	if err == nil {
+		newKeys, err = staging.BookKeys(ctx)
+	}
+	closeErr := staging.Close()
+	if err != nil {
+		return stats, err
+	}
+	if closeErr != nil {
+		return stats, fmt.Errorf("close staging database: %w", closeErr)
+	}
+	if hooks.BeforeReplace != nil {
+		if err := hooks.BeforeReplace(oldKeys, newKeys); err != nil {
+			return stats, err
+		}
+	}
+	if err := target.ReplaceFrom(ctx, stagingPath); err != nil {
+		return stats, err
+	}
+	if hooks.AfterReplace != nil {
+		if err := hooks.AfterReplace(oldKeys, newKeys); err != nil {
+			return stats, err
+		}
+	}
+	return stats, nil
 }
 
 func toBookInput(rec *inpx.Record) *store.BookInput {

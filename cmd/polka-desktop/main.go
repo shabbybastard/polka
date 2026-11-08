@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,6 +31,25 @@ import (
 )
 
 var version = "dev" // overridden at build time via -ldflags
+
+// requireLoopbackAddr refuses to bind the unauthenticated desktop API to a
+// publicly reachable interface.
+func requireLoopbackAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid --addr %q: %w", addr, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return fmt.Errorf("--addr %q is not loopback; the desktop server has no authentication", addr)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("--addr %q is not loopback; the desktop server has no authentication", addr)
+}
 
 func main() {
 	// The native window (WebView2) must live on the OS main thread.
@@ -64,6 +84,12 @@ func run() error {
 	password := flag.String("password", "", "пароль на сервере")
 	flag.BoolVar(&noBrowser, "no-browser", false, "не открывать окно (только сервер)")
 	flag.Parse()
+
+	// The desktop server has no authentication: every local request acts as
+	// the owner. Never expose it on a non-loopback address by accident.
+	if err := requireLoopbackAddr(*addr); err != nil {
+		return err
+	}
 
 	for _, dir := range []string{*dataDir, *libraryDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -125,7 +151,10 @@ func run() error {
 		fmt.Println("Режим синхронизации с сервером:", syncCfg.Server)
 	}
 
-	srv := server.New(cfg, log, st, library.New(cfg.LibraryDir), users, sync, webFS)
+	if err := server.PrepareCatalogRemap(context.Background(), st, users); err != nil {
+		return fmt.Errorf("catalog remap: %w", err)
+	}
+	srv, app := server.NewWithApp(cfg, log, st, library.New(cfg.LibraryDir), users, sync, webFS)
 
 	// Listen on a free port: multiple app instances do not conflict.
 	listener, err := net.Listen("tcp", cfg.Addr)
@@ -146,7 +175,9 @@ func run() error {
 	shutdown := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return srv.Shutdown(ctx)
+		err := srv.Shutdown(ctx)
+		app.Close()
+		return err
 	}
 
 	// Signals and server errors terminate the application from any state.

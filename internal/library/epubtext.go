@@ -66,8 +66,15 @@ func EPUBText(r io.ReaderAt, size int64, imgURL func(string) string) (*FB2Text, 
 	if err != nil {
 		return nil, err
 	}
-	err = xml.NewDecoder(rc).Decode(&opf)
+	data, err := readLimited(rc, maxOPFBytes)
 	rc.Close()
+	if err != nil {
+		return nil, fmt.Errorf("parse opf: %w", err)
+	}
+	if err := checkXMLDepth(bytes.NewReader(data), maxXMLDepth); err != nil {
+		return nil, fmt.Errorf("parse opf: %w", err)
+	}
+	err = xml.NewDecoder(bytes.NewReader(data)).Decode(&opf)
 	if err != nil {
 		return nil, fmt.Errorf("parse opf: %w", err)
 	}
@@ -106,7 +113,7 @@ func EPUBText(r io.ReaderAt, size int64, imgURL func(string) string) (*FB2Text, 
 		if !ok {
 			continue
 		}
-		docPath := path.Join(opfDir, href)
+		docPath := path.Join(opfDir, unescapePath(href))
 		rc, err := openZipFile(zr, docPath)
 		if err != nil {
 			continue
@@ -251,7 +258,7 @@ func epubChapterHTML(r io.Reader, baseDir string, imgURL func(string) string, im
 				// Internal links (table of contents etc.) survive as
 				// chapter jumps; the target is resolved in a second pass.
 				if href := nodeAttr(n, "href"); href != "" && !strings.Contains(href, "://") && !strings.HasPrefix(href, "#") {
-					target := path.Clean(path.Join(baseDir, strings.SplitN(href, "#", 2)[0]))
+					target := path.Clean(path.Join(baseDir, unescapePath(strings.SplitN(href, "#", 2)[0])))
 					sb.WriteString(`<a data-doc="` + html.EscapeString(target) + `">`)
 					for c := n.FirstChild; c != nil; c = c.NextSibling {
 						render(c)
@@ -288,7 +295,7 @@ func writeImg(sb *strings.Builder, baseDir, src string, imgURL func(string) stri
 	if strings.Contains(src, "://") {
 		return // remote images are dropped
 	}
-	full := path.Clean(path.Join(baseDir, src))
+	full := path.Clean(path.Join(baseDir, unescapePath(src)))
 	dims := ""
 	if w, h := imgDims(full); w > 0 && h > 0 {
 		dims = fmt.Sprintf(` width="%d" height="%d"`, w, h)
@@ -324,18 +331,25 @@ func textContent(n *html.Node) string {
 
 func voidTag(tag string) bool { return tag == "br" || tag == "hr" || tag == "img" }
 
-// EPUBBinary returns a file from inside the archive (chapter images).
-// name is the PathEscape-d archive path produced by EPUBText.
-func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) {
-	decoded, err := url.PathUnescape(name)
-	if err != nil {
-		return nil, "", err
+// unescapePath decodes a URI path from an EPUB manifest/HTML attribute.
+// Invalid escapes are left untouched: some real-world EPUBs contain a
+// literal '%' in a file name instead of %25.
+func unescapePath(s string) string {
+	if decoded, err := url.PathUnescape(s); err == nil {
+		return decoded
 	}
+	return s
+}
+
+// EPUBBinary returns a file from inside the archive (chapter images).
+// name is already unescaped by net/http's path matching; do not unescape it
+// a second time or a literal '%' in a file name breaks the lookup.
+func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) {
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
 		return nil, "", err
 	}
-	rc, err := openZipFile(zr, decoded)
+	rc, err := openZipFile(zr, name)
 	if err != nil {
 		return nil, "", ErrNoFile
 	}
@@ -345,7 +359,7 @@ func EPUBBinary(r io.ReaderAt, size int64, name string) ([]byte, string, error) 
 		return nil, "", err
 	}
 	mime := ""
-	switch strings.ToLower(path.Ext(decoded)) {
+	switch strings.ToLower(path.Ext(name)) {
 	case ".jpg", ".jpeg":
 		mime = "image/jpeg"
 	case ".png":

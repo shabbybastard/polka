@@ -194,7 +194,7 @@ func (s *Store) SearchByISBN(ctx context.Context, isbn string) ([]Book, error) {
 	if n == "" {
 		return nil, nil
 	}
-	return s.queryBooks(ctx, `b.isbn = ?`, `b.title`, 50, 0, n)
+	return s.queryBooks(ctx, `b.isbn = ? AND b.isbn != ''`, `b.title`, 50, 0, n)
 }
 
 // SetBookISBN records a book's ISBN (lazy indexing on view).
@@ -210,8 +210,7 @@ func (s *Store) SetBookISBN(ctx context.Context, bookID int64, isbn string) erro
 // external recommendations); returns ErrNotFound if there is no confident match.
 func (s *Store) MatchBook(ctx context.Context, title, author string) (*Book, error) {
 	var lastNames []string
-	if author != "" {
-		fields := strings.Fields(author)
+	if fields := strings.Fields(author); len(fields) > 0 {
 		// external sources use "First Last" order — take both ends
 		lastNames = append(lastNames, fields[0])
 		if len(fields) > 1 {

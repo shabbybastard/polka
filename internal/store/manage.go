@@ -314,7 +314,7 @@ func (s *Store) FindByHash(ctx context.Context, column, hash string) (*Book, err
 	if column != "file_hash" && column != "content_hash" {
 		return nil, fmt.Errorf("bad hash column %q", column)
 	}
-	books, err := s.queryBooks(ctx, `b.`+column+` = ?`, "", 1, 0, hash)
+	books, err := s.queryBooks(ctx, `b.`+column+` = ? AND b.`+column+` != ''`, "", 1, 0, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +439,54 @@ func (s *Store) BooksWithoutGenresCount(ctx context.Context) (int, error) {
 		WHERE b.deleted = 0
 		AND NOT EXISTS (SELECT 1 FROM book_genres bg WHERE bg.book_id = b.id)`).Scan(&n)
 	return n, err
+}
+
+// BookIDsExist reports which ids are present in the catalog (including
+// hidden books). Used to reject unknown ids arriving through user-data sync.
+func (s *Store) BookIDsExist(ctx context.Context, ids []int64) (map[int64]bool, error) {
+	out := make(map[int64]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	const chunkSize = 500
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+	for start := 0; start < len(unique); start += chunkSize {
+		end := start + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := strings.Repeat("?,", len(chunk)-1) + "?"
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT id FROM books WHERE id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }
 
 // BooksByIDs returns books in the order of the given ids (missing

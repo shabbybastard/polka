@@ -45,11 +45,47 @@ func (s *Service) CreateGuest(ctx context.Context) (string, *User, error) {
 // number of accounts removed.
 func (s *Service) CleanupGuests(ctx context.Context, maxAge time.Duration) (int64, error) {
 	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
-	res, err := s.db.ExecContext(ctx, `
-		DELETE FROM users WHERE login LIKE ? AND role = ? AND datetime(created_at) <= datetime(?)`,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM users WHERE login LIKE ? AND role = ? AND datetime(created_at) <= datetime(?)`,
 		guestPrefix+"%", RoleUser, cutoff)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return 0, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM users WHERE login LIKE ? AND role = ? AND datetime(created_at) <= datetime(?)`,
+		guestPrefix+"%", RoleUser, cutoff); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := deleteUserSettingsTx(tx, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(ids)), nil
 }

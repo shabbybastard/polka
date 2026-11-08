@@ -25,7 +25,11 @@ import (
 
 const (
 	uploadsFolder     = "uploads"
-	maxUploadSize     = 512 << 20 // total size of a single upload
+	maxBookUpload     = 50 << 20  // per-book HTTP request body cap
+	maxImportUpload   = 512 << 20 // inpx catalogs can be large
+	maxUploadFileSize = 50 << 20  // per-file book cap
+	maxUploadMemory   = 8 << 20   // ParseMultipartForm memory threshold
+	maxArchiveOutput  = 256 << 20 // compact response budget
 	maxExportBooks    = 500
 	uploadFilePerms   = 0o644
 	uploadFolderPerms = 0o755
@@ -61,7 +65,8 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "library-dir is not configured", http.StatusConflict)
 		return
 	}
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBookUpload)
+	if err := r.ParseMultipartForm(maxUploadMemory); err != nil {
 		http.Error(w, "upload too large or malformed", http.StatusBadRequest)
 		return
 	}
@@ -114,6 +119,9 @@ func (s *Server) handleBookUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveUploadedBook(ctx context.Context, uploadDir string, fh *multipart.FileHeader, force bool, lang string) uploadResult {
+	if fh.Size > maxUploadFileSize {
+		return uploadResult{Name: fh.Filename, Error: tr(lang, "upload.toolarge")}
+	}
 	src, err := fh.Open()
 	if err != nil {
 		return uploadResult{Name: fh.Filename, Error: tr(lang, "upload.readfail")}
@@ -292,15 +300,31 @@ func (s *Server) extractUploadMeta(path, base, ext string) *store.BookInput {
 }
 
 func sanitizeFileName(name string) string {
-	name = strings.Map(func(r rune) rune {
-		switch r {
-		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', 0:
-			return '_'
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(name) {
+		switch {
+		case r == '/', r == '\\', r == ':', r == '*', r == '?', r == '"', r == '<', r == '>', r == '|', r == 0:
+			b.WriteRune('_')
+		case r < 0x20 || r == 0x7f:
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
 		}
-		return r
-	}, strings.TrimSpace(name))
-	if len(name) > 120 {
-		name = name[:120]
+	}
+	name = strings.TrimSpace(b.String())
+	if runes := []rune(name); len(runes) > 120 {
+		name = string(runes[:120])
+	}
+	// Windows does not allow trailing dots/spaces.
+	name = strings.TrimRight(name, " .")
+	if name == "" {
+		return ""
+	}
+	base := strings.ToUpper(strings.TrimSuffix(name, filepath.Ext(name)))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		name = "_" + name
 	}
 	return name
 }
@@ -381,6 +405,14 @@ func (s *Server) handleBookSetDeleted(deleted bool) http.HandlerFunc {
 			s.apiError(w, err)
 			return
 		}
+		// Drop every per-id cache: the same id must not serve the old text or
+		// cover after a hide/restore.
+		s.reader.forget(id)
+		if s.lib != nil {
+			s.lib.ForgetCover(id)
+		}
+		s.enrich.ForgetBook(strconv.FormatInt(id, 10))
+		s.invalidateSearchStats()
 		s.log.Info("book visibility changed", "id", id, "deleted", deleted)
 		writeJSON(w, map[string]any{"ok": true})
 	}
@@ -395,7 +427,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	var ids []int64
 	for _, part := range strings.Split(r.URL.Query().Get("ids"), ",") {
-		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+		if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && id > 0 {
 			ids = append(ids, id)
 		}
 	}
@@ -414,7 +446,6 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="polka-books.zip"`)
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
 	used := map[string]int{}
 	for _, f := range files {
 		rc, _, err := s.lib.Open(f.Folder, f.File, f.Ext)
@@ -435,9 +466,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		}
 		rc.Close()
 		if err != nil {
+			zw.Close()
 			s.log.Warn("export stream", "book", f.ID, "error", err)
 			return
 		}
+	}
+	if err := zw.Close(); err != nil {
+		// Headers and the central directory may already be partially sent;
+		// log instead of trying to change the status code.
+		s.log.Warn("export finish", "error", err)
 	}
 }
 
@@ -496,7 +533,8 @@ func (s *Server) handleImportInpx(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, code)
 	}
 
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportUpload)
+	if err := r.ParseMultipartForm(maxUploadMemory); err != nil {
 		fail(http.StatusBadRequest, "upload too large or malformed")
 		return
 	}
@@ -578,17 +616,54 @@ func (s *Server) runImport(inpxPath string, replace bool, cleanup bool) {
 		s.log.Info("web import done", "books", stats.Books, "duration", stats.Duration)
 	}
 
-	if replace {
-		setPhase("clearing", 0)
-		if err := s.st.Clear(ctx); err != nil {
+	if !replace {
+		if n, err := s.st.BookCount(ctx); err != nil {
 			finish(store.ImportStats{}, err)
+			return
+		} else if n > 0 {
+			finish(store.ImportStats{}, fmt.Errorf("library is not empty; use replace"))
 			return
 		}
 	}
 
-	stats, err := importer.ImportInpx(ctx, s.log, s.st, inpxPath, setPhase)
+	hooks := importer.ReplaceHooks{
+		BeforeReplace: func(oldKeys, newKeys map[int64]string) error {
+			generation, err := s.st.CatalogGeneration(ctx)
+			if err != nil {
+				return fmt.Errorf("catalog generation: %w", err)
+			}
+			return s.users.SavePendingRemap(ctx, generation+1, store.MapBookIDs(oldKeys, newKeys))
+		},
+		AfterReplace: func(oldKeys, newKeys map[int64]string) error {
+			generation, err := s.st.CatalogGeneration(ctx)
+			if err != nil {
+				return fmt.Errorf("catalog generation: %w", err)
+			}
+			remapErr := s.users.ApplyPendingRemap(ctx, generation)
+			// Reset caches and collection matches even if the remap must be
+			// retried later: old ids are invalid for the new catalog.
+			if s.cols != nil {
+				if err := s.cols.ResetMatches(ctx); err != nil && remapErr == nil {
+					remapErr = fmt.Errorf("reset collection matches: %w", err)
+				}
+			}
+			s.reader.clear()
+			if s.lib != nil {
+				s.lib.ForgetAllCovers()
+			}
+			s.enrich.ForgetAll()
+			s.invalidateGenreCache()
+			if remapErr != nil {
+				// Keep pending_book_remap: the next startup retries it.
+				return fmt.Errorf("remap user data (will retry): %w", remapErr)
+			}
+			return nil
+		},
+	}
+	stats, err := importer.ReplaceInpx(ctx, s.log, s.st, inpxPath, s.cfg.DataDir, setPhase, hooks)
 	finish(stats, err)
 	if err == nil {
+		s.invalidateSearchStats()
 		s.warnIfArchivesMissing(ctx)
 		s.rematchCollections(ctx)
 	}

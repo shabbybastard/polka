@@ -71,10 +71,15 @@ func TestSimilarSources(t *testing.T) {
 		t.Errorf("first = %+v", out[0])
 	}
 
-	// Cache: a repeated call with sources disabled returns the saved data
-	out2 := p.Similar(context.Background(), "sim:1", "Пикник на обочине", "Стругацкие", SimilarConfig{})
+	// Cache: a repeated call with the same configuration is served from cache.
+	out2 := p.Similar(context.Background(), "sim:1", "Пикник на обочине", "Стругацкие", cfg)
 	if len(out2) != len(out) {
 		t.Errorf("cache miss: %d != %d", len(out2), len(out))
+	}
+	// Disabling the sources must not keep serving their cached results.
+	out3 := p.Similar(context.Background(), "sim:1", "Пикник на обочине", "Стругацкие", SimilarConfig{})
+	if len(out3) != 0 {
+		t.Errorf("disabled sources returned cached data: %+v", out3)
 	}
 }
 

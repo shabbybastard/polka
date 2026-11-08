@@ -2,6 +2,7 @@ package library
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"html"
@@ -9,6 +10,43 @@ import (
 	"path"
 	"strings"
 )
+
+const (
+	// Metadata XML is small; cap it well below maxArchiveEntrySize so an
+	// OPF/container "bomb" cannot make the XML decoder allocate hundreds of
+	// megabytes before returning an error.
+	maxOPFBytes       = 8 << 20
+	maxContainerBytes = 1 << 20
+	maxXMLDepth       = 256
+)
+
+// checkXMLDepth walks the token stream iteratively and rejects absurdly deep
+// nesting before xml.Decode gets a chance to recurse into a stack overflow.
+func checkXMLDepth(r io.Reader, max int) error {
+	dec := xml.NewDecoder(r)
+	dec.Strict = false
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			depth++
+			if depth > max {
+				return fmt.Errorf("xml nesting exceeds %d", max)
+			}
+		case xml.EndElement:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+}
 
 // EPUBMeta holds metadata from the EPUB OPF manifest.
 type EPUBMeta struct {
@@ -71,7 +109,14 @@ func epubRootFile(zr *zip.Reader) (string, error) {
 				FullPath string `xml:"full-path,attr"`
 			} `xml:"rootfiles>rootfile"`
 		}
-		if err := xml.NewDecoder(rc).Decode(&container); err != nil {
+		data, err := readLimited(rc, maxContainerBytes)
+		if err != nil {
+			return "", fmt.Errorf("container.xml: %w", err)
+		}
+		if err := checkXMLDepth(bytes.NewReader(data), maxXMLDepth); err != nil {
+			return "", fmt.Errorf("container.xml: %w", err)
+		}
+		if err := xml.NewDecoder(bytes.NewReader(data)).Decode(&container); err != nil {
 			return "", fmt.Errorf("container.xml: %w", err)
 		}
 		if len(container.Rootfiles) == 0 {
@@ -98,7 +143,14 @@ func parseOPF(r io.Reader) (*EPUBMeta, error) {
 			} `xml:"identifier"`
 		} `xml:"metadata"`
 	}
-	dec := xml.NewDecoder(r)
+	data, err := readLimited(r, maxOPFBytes)
+	if err != nil {
+		return nil, fmt.Errorf("opf: %w", err)
+	}
+	if err := checkXMLDepth(bytes.NewReader(data), maxXMLDepth); err != nil {
+		return nil, fmt.Errorf("opf: %w", err)
+	}
+	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 	if err := dec.Decode(&opf); err != nil {
 		return nil, fmt.Errorf("opf: %w", err)
@@ -198,8 +250,15 @@ func EPUBCover(r io.ReaderAt, size int64) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	err = xml.NewDecoder(rc).Decode(&opf)
+	data, err := readLimited(rc, maxOPFBytes)
 	rc.Close()
+	if err != nil {
+		return nil, "", fmt.Errorf("parse opf: %w", err)
+	}
+	if err := checkXMLDepth(bytes.NewReader(data), maxXMLDepth); err != nil {
+		return nil, "", fmt.Errorf("parse opf: %w", err)
+	}
+	err = xml.NewDecoder(bytes.NewReader(data)).Decode(&opf)
 	if err != nil {
 		return nil, "", fmt.Errorf("parse opf: %w", err)
 	}
@@ -230,13 +289,13 @@ func EPUBCover(r io.ReaderAt, size int64) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("epub: no cover")
 	}
 
-	coverPath := path.Join(path.Dir(opfPath), href)
+	coverPath := path.Join(path.Dir(opfPath), unescapePath(href))
 	rc, err = openZipFile(zr, coverPath)
 	if err != nil {
 		return nil, "", err
 	}
 	defer rc.Close()
-	data, err := readLimited(rc, maxArchiveEntrySize)
+	data, err = readLimited(rc, maxArchiveEntrySize)
 	if err != nil {
 		return nil, "", err
 	}
