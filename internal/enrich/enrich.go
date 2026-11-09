@@ -50,7 +50,9 @@ const (
 	blockedBackoff = time.Hour
 
 	// Bump this when the parser or the cached result shape changes.
-	cacheVersion = 5
+	// v6: FantLab ratings use the displayed rating.rating field instead of
+	// the lower true_rating, so old 3.98/5 values must be re-fetched.
+	cacheVersion = 6
 )
 
 // Sources lists all sources in priority order.
@@ -145,26 +147,70 @@ func (p *Provider) loadCache() {
 	if data, err := os.ReadFile(p.cachePath); err == nil {
 		json.Unmarshal(data, &p.cache)
 	}
-	data, err := os.ReadFile(p.cacheJournalPath())
-	if err != nil {
-		return
+	hadJournal := false
+	if data, err := os.ReadFile(p.cacheJournalPath()); err == nil {
+		hadJournal = true
+		for _, line := range bytes.Split(data, []byte("\n")) {
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var rec cacheJournalRecord
+			if json.Unmarshal(line, &rec) != nil || rec.Key == "" {
+				continue
+			}
+			if rec.Delete {
+				delete(p.cache, rec.Key)
+			} else if rec.Entry != nil {
+				p.cache[rec.Key] = *rec.Entry
+			}
+		}
 	}
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		if len(bytes.TrimSpace(line)) == 0 {
+	// A cacheVersion bump normally invalidates every entry. Keep entries that
+	// cannot contain the old FantLab value, otherwise the "empty" rating job
+	// would re-process the whole library after this fix.
+	changed := p.migrateCacheVersion()
+	// Compact a journal left by an interrupted process, and persist a
+	// migration even when there is no journal. A fresh data directory stays
+	// untouched until the first enrichment request.
+	if hadJournal || changed {
+		p.writeCacheLocked()
+	}
+}
+
+// migrateCacheVersion upgrades entries written by the previous cache format
+// (v5) unless they contain a FantLab rating. Those are dropped and re-fetched
+// with the corrected rating field. The caller is single-threaded startup code.
+func (p *Provider) migrateCacheVersion() bool {
+	changed := false
+	for key, entry := range p.cache {
+		if entry.Version != 5 {
 			continue
 		}
-		var rec cacheJournalRecord
-		if json.Unmarshal(line, &rec) != nil || rec.Key == "" {
+		if enrichmentHasSource(entry.Result, SourceFantLab) {
+			delete(p.cache, key)
+			changed = true
 			continue
 		}
-		if rec.Delete {
-			delete(p.cache, rec.Key)
-		} else if rec.Entry != nil {
-			p.cache[rec.Key] = *rec.Entry
+		entry.Version = cacheVersion
+		p.cache[key] = entry
+		changed = true
+	}
+	return changed
+}
+
+func enrichmentHasSource(res *Enrichment, source string) bool {
+	if res == nil {
+		return false
+	}
+	if res.Primary != nil && res.Primary.Source == source {
+		return true
+	}
+	for _, src := range res.Sources {
+		if src.Source == source {
+			return true
 		}
 	}
-	// Compact a journal left by an interrupted process.
-	p.writeCacheLocked()
+	return false
 }
 
 type cacheJournalRecord struct {
@@ -1051,6 +1097,7 @@ func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throt
 			Voters     int          `json:"voters"`
 		} `json:"rating"`
 		ValMidmarkByWeight fantlabFloat `json:"val_midmark_by_weight"`
+		ValMidmark         fantlabFloat `json:"val_midmark"`
 		ValVoters          int          `json:"val_voters"`
 		WorkTypeID         int          `json:"work_type_id"`
 		WorkTypeName       string       `json:"work_type_name"`
@@ -1062,14 +1109,20 @@ func (p *Provider) fetchFantLab(ctx context.Context, title, author string, throt
 		return nil, nil
 	}
 
-	// FantLab rounds rating.rating to two decimals; true_rating keeps the
-	// unrounded value (8.52 for Dune, while rating.rating is 8.61).
-	raw := float64(work.Rating.TrueRating)
-	if raw <= 0 {
-		raw = float64(work.Rating.Rating)
-	}
+	// FantLab shows rating.rating on the work page (8.03 for Cat's Cradle,
+	// while true_rating is 7.95). Prefer the displayed value so the book
+	// card matches the site. If the rounded field is empty, use the weighted
+	// average first (it is the value shown on the site); true_rating is a
+	// different metric and is only a last resort.
+	raw := float64(work.Rating.Rating)
 	if raw <= 0 {
 		raw = float64(work.ValMidmarkByWeight)
+	}
+	if raw <= 0 {
+		raw = float64(work.Rating.TrueRating)
+	}
+	if raw <= 0 {
+		raw = float64(work.ValMidmark)
 	}
 	if raw <= 0 {
 		return nil, nil

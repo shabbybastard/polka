@@ -62,6 +62,11 @@ export const updateBookEPUB = (id, formData) =>
 export const forgetBookEnrichment = (id) =>
   post(`admin/books/${id}/forget-enrichment`);
 
+export const refreshBookEnrichment = (id) =>
+  post(`api/v1/books/${id}/refresh-enrichment`);
+
+export const checkSources = () => post("admin/sources/check");
+
 export const importInpx = ({ file, path, replace } = {}) => {
   const fd = new FormData();
   if (file) fd.append("file", file);

@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import AdminUsersPage from "./AdminUsersPage";
 import { Link } from "react-router-dom";
 import {
+  checkSources,
   fetchConversions,
   fetchSettings,
   genreSyncStatus,
@@ -37,6 +38,33 @@ const PHASE_LABELS = () => ({
   loading: t("admin.import.loading"),
   indexing: t("admin.import.indexing"),
 });
+
+const SOURCE_STATE_LABELS = () => ({
+  ok: t("admin.sources.state.ok"),
+  degraded: t("admin.sources.state.degraded"),
+  error: t("admin.sources.state.error"),
+  missing_key: t("admin.sources.state.missingKey"),
+  disabled: t("admin.sources.state.disabled"),
+});
+
+const SourceCheckBadge = ({ check }) => {
+  if (!check) return null;
+  const state = check.state || "error";
+  const label = SOURCE_STATE_LABELS()[state] ?? state;
+  const details = [];
+  if (state === "ok" || state === "degraded") {
+    if (check.status) details.push(`HTTP ${check.status}`);
+  } else if (check.message) {
+    details.push(check.message);
+  }
+  if (check.latencyMs) details.push(`${check.latencyMs} ${t("admin.sources.ms")}`);
+  return (
+    <span className={`library-admin__source-check library-admin__source-check--${state}`}>
+      {label}
+      {details.length > 0 ? ` · ${details.join(" · ")}` : ""}
+    </span>
+  );
+};
 
 // External collection sources (Forbes) are temporarily hidden from the
 // UI: the backend and its settings stay intact, so the block below can be
@@ -225,6 +253,9 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
   const ratingPolling = useRef(null);
   const [similar, setSimilar] = useState(null);
   const [tastediveKey, setTastediveKey] = useState("");
+  const [sourceChecks, setSourceChecks] = useState(null);
+  const [sourceCheckBusy, setSourceCheckBusy] = useState(false);
+  const [sourceCheckedAt, setSourceCheckedAt] = useState("");
   const [googleBooksKey, setGoogleBooksKey] = useState("");
   const [homeHero, setHomeHero] = useState(true);
   const [opdsEnabled, setOpdsEnabled] = useState(true);
@@ -331,6 +362,20 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       setTagSources(tagSources);
       alert(t("admin.sources.saveFail"));
     });
+  };
+
+  const runSourceChecks = () => {
+    if (sourceCheckBusy) return;
+    setSourceCheckBusy(true);
+    checkSources()
+      .then((res) => {
+        const next = {};
+        for (const check of res.sources ?? []) next[check.source] = check;
+        setSourceChecks(next);
+        setSourceCheckedAt(res.checkedAt ?? "");
+      })
+      .catch(() => alert(t("admin.sources.checkFail")))
+      .finally(() => setSourceCheckBusy(false));
   };
 
   const startGenreSync = (mode) => {
@@ -977,6 +1022,30 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
 
       {tab === "sources" && (
       <section className="library-admin__section">
+        <h2>{t("admin.sources.health")}</h2>
+        <p className="library-admin__hint">{t("admin.sources.healthHint")}</p>
+        <div className="library-admin__source-check-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={runSourceChecks}
+            disabled={sourceCheckBusy || !enrichment}
+          >
+            {sourceCheckBusy ? t("admin.sources.checking") : t("admin.sources.check")}
+          </button>
+          {sourceCheckedAt && (
+            <span className="library-admin__source-check-time">
+              {t("admin.sources.checkedAt", {
+                time: new Date(sourceCheckedAt).toLocaleTimeString(),
+              })}
+            </span>
+          )}
+        </div>
+      </section>
+      )}
+
+      {tab === "sources" && (
+      <section className="library-admin__section">
         <h2>{t("admin.sources")}</h2>
         <p className="library-admin__hint">
           {t("admin.sources.hint")}
@@ -995,6 +1064,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                   <span className="library-admin__source-name">{src.label}</span>
                   <span className="library-admin__source-hint">{src.hint}</span>
                 </label>
+                <SourceCheckBadge check={sourceChecks?.[src.id]} />
               </li>
             ))}
           </ul>
@@ -1094,6 +1164,9 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
             <p className="library-admin__hint library-admin__genre-note">
               {t("admin.ratings.background")}
             </p>
+            <p className="library-admin__hint library-admin__genre-note">
+              {t("admin.ratings.cacheHint")}
+            </p>
           </div>
         )}
       </section>
@@ -1118,6 +1191,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                   <span className="library-admin__source-name">{src.label}</span>
                   <span className="library-admin__source-hint">{src.hint}</span>
                 </label>
+                <SourceCheckBadge check={sourceChecks?.[src.id]} />
               </li>
             ))}
           </ul>
@@ -1213,6 +1287,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                 <span className="library-admin__source-name">{t("source.fantlab")}</span>
                 <span className="library-admin__source-hint">{t("admin.fantlab.hint")}</span>
               </label>
+              <SourceCheckBadge check={sourceChecks?.fantlab} />
             </li>
             <li>
               <label className="library-admin__source">
@@ -1220,6 +1295,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                 <span className="library-admin__source-name">TasteDive</span>
                 <span className="library-admin__source-hint">{t("admin.tastedive.hint")}</span>
               </label>
+              <SourceCheckBadge check={sourceChecks?.tastedive} />
             </li>
           </ul>
         )}

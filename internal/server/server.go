@@ -183,6 +183,8 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 			"POST /admin/books/{id}/metadata",
 			"POST /admin/books/{id}/epub",
 			"POST /admin/books/{id}/forget-enrichment",
+			"POST /api/v1/books/{id}/refresh-enrichment",
+			"POST /admin/sources/check",
 			"POST /admin/import/inpx",
 			"GET /admin/import/status",
 			"GET /admin/conversions",
@@ -210,6 +212,7 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 			mux.HandleFunc("POST /admin/books/{id}/metadata", s.adminOnly(s.handleBookMetadata))
 			mux.HandleFunc("POST /admin/books/{id}/epub", s.adminOnly(s.handleBookEPUBEdit))
 			mux.HandleFunc("POST /admin/books/{id}/forget-enrichment", s.adminOnly(s.handleForgetBookEnrichment))
+			mux.HandleFunc("POST /api/v1/books/{id}/refresh-enrichment", s.adminOnly(s.handleRefreshBookEnrichment))
 			mux.HandleFunc("POST /admin/import/inpx", s.adminOnly(s.handleImportInpx))
 			mux.HandleFunc("GET /admin/import/status", s.adminOnly(s.handleImportStatus))
 			mux.HandleFunc("GET /admin/conversions", s.adminOnly(s.handleConversionList))
@@ -283,6 +286,7 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 			mux.HandleFunc("GET /admin/genres/status", s.adminOnly(s.handleGenreSyncStatus))
 			mux.HandleFunc("POST /admin/ratings/sync", s.adminOnly(s.handleRatingSyncStart))
 			mux.HandleFunc("GET /admin/ratings/status", s.adminOnly(s.handleRatingSyncStatus))
+			mux.HandleFunc("POST /admin/sources/check", s.adminOnly(s.handleSourcesCheck))
 		}
 
 		// User data state for desktop clients

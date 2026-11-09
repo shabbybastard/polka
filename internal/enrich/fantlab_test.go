@@ -52,11 +52,46 @@ func TestFantLabRating(t *testing.T) {
 		t.Fatalf("primary = %+v", res.Primary)
 	}
 	got := res.Primary
-	if got.Rating != 4.26 || got.RatingMax != 5 || got.RatingsCount != 9770 {
+	if got.Rating != 4.305 || got.RatingMax != 5 || got.RatingsCount != 9770 {
 		t.Errorf("rating = %+v", got)
 	}
 	if got.InfoURL != "https://fantlab.ru/work4325" {
 		t.Errorf("infoUrl = %q", got.InfoURL)
+	}
+}
+
+func TestFantLabUsesDisplayedRating(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search-works"):
+			w.Write([]byte(`{"matches":[
+			  {"work_id":1435,"rusname":"Колыбель для кошки","name":"Cat's Cradle","name_eng":"novel","work_type_id":1,"work_type_name":"роман","all_autor_rusname":"Курт Воннегут"}
+			]}`))
+		case r.URL.Path == "/work/1435":
+			w.Write([]byte(`{
+			  "rating":{"rating":"8.03","true_rating":"7.95","voters":2878},
+			  "val_midmark_by_weight":8.03,
+			  "val_midmark":8.06,
+			  "val_voters":2878,
+			  "work_type_id":1,
+			  "work_type_name":"novel"
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.FantLabBase = srv.URL
+
+	res := p.Get(context.Background(), "fantlab-cat", "Колыбель для кошки", "Курт Воннегут",
+		map[string]bool{SourceFantLab: true}, nil)
+	if res.Primary == nil || res.Primary.Source != SourceFantLab {
+		t.Fatalf("primary = %+v", res.Primary)
+	}
+	if got := res.Primary.Rating; got != 4.015 {
+		t.Errorf("rating = %v, want 4.015 (8.03/2)", got)
 	}
 }
 
@@ -75,6 +110,25 @@ func TestFantLabFallbackRating(t *testing.T) {
 		map[string]bool{SourceFantLab: true}, nil)
 	if res.Primary == nil || res.Primary.Rating != 4.26 || res.Primary.RatingsCount != 123 {
 		t.Fatalf("fallback rating = %+v", res.Primary)
+	}
+}
+
+func TestFantLabFallbackPrefersWeightedRating(t *testing.T) {
+	fl, _ := fantlabServer(t, `{
+		"rating":{"rating":"0","true_rating":"8.4","voters":10},
+		"val_midmark_by_weight":7.9,
+		"val_midmark":8.4,
+		"val_voters":10,
+		"work_type_id":1,
+		"work_type_name":"novel"
+	}`)
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.FantLabBase = fl.URL
+
+	res := p.Get(context.Background(), "fantlab-fallback-weight", "Дюна", "Фрэнк Герберт",
+		map[string]bool{SourceFantLab: true}, nil)
+	if res.Primary == nil || res.Primary.Rating != 3.95 {
+		t.Fatalf("fallback rating = %+v, want 3.95 (7.9/2)", res.Primary)
 	}
 }
 

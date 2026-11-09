@@ -89,7 +89,20 @@ const Root = () => {
       <footer className="root-footer">
         <div className="container">
           {t("footer")}
-          {version && <span className="root-footer__version"> · {version}</span>}
+          {version && (
+            <span className="root-footer__version">
+              {" · "}
+              <a
+                className="root-footer__version-link"
+                href="https://github.com/shabbybastard/polka"
+                target="_blank"
+                rel="noreferrer"
+                title={t("footer.repo")}
+              >
+                {version}
+              </a>
+            </span>
+          )}
         </div>
       </footer>
     </>

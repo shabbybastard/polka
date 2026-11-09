@@ -5,6 +5,7 @@ import { t } from "../i18n";
 import AdminLibraryPage from "./AdminLibraryPage";
 
 vi.mock("../api/manage", () => ({
+  checkSources: vi.fn(),
   fetchConversions: vi.fn(),
   fetchSettings: vi.fn(),
   genreSyncStatus: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("../api/auth", () => ({
 }));
 
 import {
+  checkSources,
   fetchConversions,
   fetchSettings,
   genreSyncStatus,
@@ -157,5 +159,31 @@ describe("AdminLibraryPage", () => {
     fireEvent.click(await screen.findByLabelText(t("admin.home.hero")));
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith({ homeHero: false }));
     await waitFor(() => expect(onConfigChange).toHaveBeenCalledTimes(1));
+  });
+
+  it("checks external sources and renders their states", async () => {
+    mockBase();
+    checkSources.mockResolvedValue({
+      checkedAt: "2026-11-09T19:30:00Z",
+      sources: [
+        { source: "livelib", state: "ok", status: 200, latencyMs: 412 },
+        { source: "fantlab", state: "error", status: 500, message: "HTTP 500" },
+        { source: "google_books", state: "missing_key" },
+        { source: "open_library", state: "ok", status: 200, latencyMs: 300 },
+        { source: "tastedive", state: "disabled" },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.sources") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.sources.check") }));
+    await waitFor(() => expect(checkSources).toHaveBeenCalled());
+    expect((await screen.findAllByText(new RegExp(t("admin.sources.state.error")))).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(new RegExp(t("admin.sources.state.missingKey")))).length).toBeGreaterThan(0);
   });
 });

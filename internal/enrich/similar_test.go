@@ -83,6 +83,37 @@ func TestSimilarSources(t *testing.T) {
 	}
 }
 
+func TestForgetBookClearsSimilarCache(t *testing.T) {
+	fl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/search-works"):
+			w.Write([]byte(fantlabSearch))
+		case strings.HasSuffix(r.URL.Path, "/similars"):
+			w.Write([]byte(fantlabSimilars))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fl.Close)
+
+	p := New(filepath.Join(t.TempDir(), "cache.json"))
+	p.FantLabBase = fl.URL
+	cfg := SimilarConfig{FantLab: true}
+	out := p.Similar(context.Background(), "sim:1", "Пикник на обочине", "Стругацкие", cfg)
+	if len(out) == 0 {
+		t.Fatal("similar results are empty")
+	}
+
+	p.ForgetBook("1")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.similar {
+		if key == "sim:1" || strings.HasPrefix(key, "sim:1|") {
+			t.Errorf("similar cache was not cleared: %q", key)
+		}
+	}
+}
+
 func TestSimilarDisabled(t *testing.T) {
 	p := New(filepath.Join(t.TempDir(), "cache.json"))
 	p.FantLabBase = "http://127.0.0.1:1"

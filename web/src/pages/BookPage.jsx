@@ -1,13 +1,13 @@
 import { t } from "../i18n";
 import { formatRating } from "../utils/rating";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/api";
 import RatingStars from "../components/RatingStars";
 import RateStars from "../components/RateStars";
 import { fetchBookForm, fetchExternalEnrichment, fetchSimilarBooks, saveExternalGenres } from "../api/fetchBooks";
 import Shelf from "../components/Shelf";
-import { deleteBook, forgetBookEnrichment, updateBookEPUB, updateBookMetadata } from "../api/manage";
+import { deleteBook, forgetBookEnrichment, refreshBookEnrichment, updateBookEPUB, updateBookMetadata } from "../api/manage";
 import { deleteProgress, fetchProgress, localProgress } from "../api/reader";
 import { rateBook } from "../api/ratings";
 import { toggleWishlist } from "../api/lists";
@@ -96,6 +96,7 @@ const BookPage = ({ user, sync }) => {
   const [readProgress, setReadProgress] = useState(0);
   const [forgetBusy, setForgetBusy] = useState(false);
   const [forgetExternalBusy, setForgetExternalBusy] = useState(false);
+  const [refreshExternalBusy, setRefreshExternalBusy] = useState(false);
   const [smtpReady, setSmtpReady] = useState(false);
   const [readerEmail, setReaderEmailState] = useState("");
   const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(null);
@@ -423,6 +424,57 @@ const BookPage = ({ user, sync }) => {
       : data.bookForm?.AuthorsNames || "";
   }, [data]);
 
+  const applyEnrichment = useCallback(
+    (res, seq) => {
+      setEnrichment(res ?? null);
+      // GET is read-only; persist the tags with an explicit POST, then pick
+      // the new genre list up immediately, like ratings.
+      if (!res?.tags?.length || user?.role !== "admin") return;
+      saveExternalGenres(bookId)
+        .then(() => fetchBookForm({ selectedItemID: bookId }))
+        .then((form) => {
+          if (seq !== enrichSeq.current || !form?.bookForm) return;
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  bookForm: {
+                    ...prev.bookForm,
+                    Genres: form.bookForm.Genres ?? prev.bookForm.Genres,
+                  },
+                  genresList: form.genresList ?? prev.genresList,
+                }
+              : prev
+          );
+        })
+        .catch(() => {});
+    },
+    [bookId, user?.role]
+  );
+
+  // Administrator action: re-fetch ratings, links, tags and similar books
+  // for this book. The server drops its enrichment/similar cache first.
+  const refreshExternal = () => {
+    if (refreshExternalBusy) return;
+    setRefreshExternalBusy(true);
+    const seq = ++enrichSeq.current;
+    refreshBookEnrichment(bookId)
+      .then((res) => {
+        if (seq !== enrichSeq.current) return;
+        applyEnrichment(res, seq);
+        return fetchSimilarBooks({
+          bookId,
+          title: data?.bookForm?.Title,
+          author: authorForEnrichment,
+        }).then((similarRes) => {
+          if (seq !== enrichSeq.current) return;
+          setSimilar(similarRes ?? null);
+        });
+      })
+      .catch(() => alert(t("book.refreshExternalFail")))
+      .finally(() => setRefreshExternalBusy(false));
+  };
+
   useEffect(() => {
     if (!data?.bookForm?.BookID) return undefined;
     let cancelled = false;
@@ -437,31 +489,9 @@ const BookPage = ({ user, sync }) => {
     })
       .then((res) => {
         if (cancelled || seq !== enrichSeq.current) return;
-        setEnrichment(res ?? null);
-        // GET is read-only; persist the tags with an explicit POST, then
-        // pick the new genre list up immediately, like ratings.
-        if (res?.tags?.length && user?.role === "admin") {
-          saveExternalGenres(bookId)
-            .then(() => fetchBookForm({ selectedItemID: bookId }))
-            .then((form) => {
-              if (cancelled || seq !== enrichSeq.current || !form?.bookForm) return;
-              setData((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      bookForm: {
-                        ...prev.bookForm,
-                        Genres: form.bookForm.Genres ?? prev.bookForm.Genres,
-                      },
-                      genresList: form.genresList ?? prev.genresList,
-                    }
-                  : prev
-              );
-            })
-            .catch(() => {});
-        }
+        applyEnrichment(res, seq);
       })
-      .catch(() => !cancelled && setEnrichment(null));
+      .catch(() => !cancelled && seq === enrichSeq.current && setEnrichment(null));
 
     setSimilar(null);
     fetchSimilarBooks({
@@ -475,7 +505,7 @@ const BookPage = ({ user, sync }) => {
     return () => {
       cancelled = true;
     };
-  }, [data?.bookForm?.BookID, data?.bookForm?.Title, authorForEnrichment, data?.isbn, user?.id]);
+  }, [data?.bookForm?.BookID, data?.bookForm?.Title, authorForEnrichment, data?.isbn, user?.id, applyEnrichment]);
 
   const authorsLine = useMemo(() => {
     if (!data?.authors?.length) return data?.bookForm?.AuthorsNames ?? "";
@@ -791,6 +821,15 @@ const BookPage = ({ user, sync }) => {
               <div className="book-page__actions-row book-page__actions-row--tools">
                 <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
                   {t("book.edit")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost book-page__refresh-external"
+                  onClick={refreshExternal}
+                  disabled={refreshExternalBusy}
+                  title={t("book.refreshExternalHint")}
+                >
+                  {refreshExternalBusy ? t("book.refreshing") : t("book.refreshExternal")}
                 </button>
                 <button
                   type="button"

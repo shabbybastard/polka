@@ -370,6 +370,84 @@ func TestEnrichCacheJournalReplay(t *testing.T) {
 	}
 }
 
+func TestEnrichCacheVersionMigrationKeepsNonFantLabEntries(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cache.json")
+	cache := map[string]cacheEntry{
+		"keep": {
+			Version: 5,
+			Result: &Enrichment{Sources: []Result{
+				{Source: SourceLiveLib, Rating: 4.2},
+			}},
+		},
+		"drop": {
+			Version: 5,
+			Result: &Enrichment{Sources: []Result{
+				{Source: SourceFantLab, Rating: 3.98},
+			}},
+		},
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(cachePath)
+	keep, ok := p.cache["keep"]
+	if !ok {
+		t.Fatal("non-FantLab v5 entry was dropped")
+	}
+	if keep.Version != cacheVersion {
+		t.Errorf("keep version = %d, want %d", keep.Version, cacheVersion)
+	}
+	if _, ok := p.cache["drop"]; ok {
+		t.Error("FantLab v5 entry must be dropped and re-fetched")
+	}
+}
+
+func TestEnrichCacheVersionMigrationAfterJournalReplay(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cache.json")
+	cache := map[string]cacheEntry{
+		"keep": {
+			Version: 5,
+			Result: &Enrichment{Sources: []Result{
+				{Source: SourceLiveLib, Rating: 4.2},
+			}},
+		},
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := cacheEntry{
+		Version: 5,
+		Result: &Enrichment{Sources: []Result{
+			{Source: SourceFantLab, Rating: 3.98},
+		}},
+	}
+	line, err := json.Marshal(cacheJournalRecord{Key: "drop", Entry: &entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath+".journal", append(line, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(cachePath)
+	if keep, ok := p.cache["keep"]; !ok || keep.Version != cacheVersion {
+		t.Errorf("keep entry = %+v, want version %d", keep, cacheVersion)
+	}
+	if _, ok := p.cache["drop"]; ok {
+		t.Error("FantLab journal entry must be dropped and re-fetched")
+	}
+}
+
 func TestEnrichCacheVersionInvalidates(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "cache.json")
 
@@ -398,7 +476,7 @@ func TestEnrichCacheVersionInvalidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := cache["v"]
-	entry.Version = cacheVersion - 1
+	entry.Version = cacheVersion - 2
 	cache["v"] = entry
 	if data, err = json.Marshal(cache); err != nil {
 		t.Fatal(err)

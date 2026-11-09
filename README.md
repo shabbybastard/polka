@@ -225,7 +225,10 @@ External rating/recommendation sources are configured in the web UI
 Google Books ratings are enabled by default (Google Books needs an API
 key); FantLab ratings and TasteDive are off. Similar-books FantLab is on by
 default. External genre sources are a separate switch and are off by
-default.
+default. The same page has a **Check all** button that probes every enabled
+source and shows its HTTP status and latency, and an administrator can force
+a fresh fetch of ratings, genres and similar books from the book page
+(*Refresh external data*).
 
 ### Telegram bot (optional)
 
@@ -281,8 +284,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.7`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.7`, and the version for local
+(current: `v0.1.22-fork.8`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.8`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

@@ -2,13 +2,13 @@ package server
 
 import (
 	"context"
-
 	"encoding/json"
-	"github.com/shabbybastard/polka/internal/collections/sources"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/shabbybastard/polka/internal/collections/sources"
 	"github.com/shabbybastard/polka/internal/enrich"
 )
 
@@ -84,6 +84,50 @@ func (s *Server) handleGetEnrichment(w http.ResponseWriter, r *http.Request) {
 	s.enrich.SetGoogleAPIKey(s.users.GetSetting(r.Context(), "enrich.google_api_key", ""))
 	key := strconv.FormatInt(id, 10)
 	res := s.enrich.Get(r.Context(), key, d.Title, d.AuthorNames, enabled, tagSources)
+	writeJSON(w, s.enrichmentView(res, enabled))
+}
+
+// POST /admin/sources/check — probe the enabled external sources. The check
+// is diagnostic: it bypasses the enrichment cache and per-source backoff and
+// only reports availability, without changing cached book data.
+func (s *Server) handleSourcesCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	s.enrich.SetGoogleAPIKey(s.users.GetSetting(ctx, "enrich.google_api_key", ""))
+	checks := s.enrich.CheckSources(ctx, s.enrichEnabled(r), s.enabledTagSources(r.Context()), s.similarConfig(r))
+	writeJSON(w, map[string]any{
+		"checkedAt": time.Now().UTC(),
+		"sources":   checks,
+	})
+}
+
+// POST /api/v1/books/{id}/refresh-enrichment — administrator-only forced
+// refresh of the external data for one book. The provider cache (ratings and
+// similar books) is dropped first, then the sources are queried again.
+func (s *Server) handleRefreshBookEnrichment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	d, err := s.st.BookDetails(r.Context(), id)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	enabled := s.enrichEnabled(r)
+	tagSources := s.enabledTagSources(r.Context())
+	s.enrich.SetGoogleAPIKey(s.users.GetSetting(r.Context(), "enrich.google_api_key", ""))
+	key := strconv.FormatInt(id, 10)
+
+	// ForgetBook also drops the similar-books cache, so the frontend can
+	// re-fetch that list after this request without getting stale entries.
+	s.enrich.ForgetBook(key)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res := s.enrich.Get(ctx, key, d.Title, d.AuthorNames, enabled, tagSources)
 	writeJSON(w, s.enrichmentView(res, enabled))
 }
 

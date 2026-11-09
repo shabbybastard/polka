@@ -46,3 +46,14 @@
   font-family: var(--mono, monospace);
   font-size: 0.9em;
 }
+
+.root-footer__version-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.root-footer__version-link:hover {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
