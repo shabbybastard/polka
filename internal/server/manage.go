@@ -648,9 +648,7 @@ func (s *Server) runImport(inpxPath string, replace bool, cleanup bool) {
 				}
 			}
 			s.reader.clear()
-			if s.lib != nil {
-				s.lib.ForgetAllCovers()
-			}
+			s.resetCoverCache(ctx)
 			s.enrich.ForgetAll()
 			s.invalidateGenreCache()
 			if remapErr != nil {

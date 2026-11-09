@@ -270,6 +270,19 @@ files. Temporary downloads are deleted after ingestion.
 - The catalog at `/search` shows every genre shelf in alphabetical order, with
   books sorted by title inside each shelf. Bulk genre loading is throttled
   (2 s + jitter per source) and backs off for an hour on HTTP 403/429.
+- Optimized Flibusta distributions store book archives as ZIP entries
+  compressed with **PPMd** (method 98), which Go's standard ZIP reader cannot
+  decode. Polka embeds the public-domain 7-Zip PPMd8 decoder compiled to a
+  small wasm module and runs it with wazero (pure Go, no CGO or external
+  `7z`). Covers stored in separate PPMd `covers/*.zip` archives work too.
+  `make ppmd-wasm` rebuilds the embedded module (requires zig); normal
+  builds use the committed `internal/ppmd8/ppmd8.wasm.gz`.
+- Extracted covers are cached on disk under `<data-dir>/cover-cache`
+  (sharded by book id, with negative markers for books without a cover).
+  The first request for a book unpacks it; later requests and restarts serve
+  the cover from disk. Entries not requested for two weeks are pruned
+  automatically; actively used covers stay. The cache is invalidated when
+  the catalog generation changes after a re-import.
 
 ## About this fork
 
@@ -281,8 +294,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.7`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.7`, and the version for local
+(current: `v0.1.22-fork.8`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.8`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

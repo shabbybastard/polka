@@ -8,6 +8,7 @@ require (
 	github.com/gen2brain/jpegxl v0.4.5
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
+	github.com/tetratelabs/wazero v1.9.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.55.0
@@ -30,7 +31,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/stangelandcl/ppmd v0.1.1 // indirect
-	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/sys v0.49.0 // indirect

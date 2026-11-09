@@ -7,14 +7,19 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/bodgit/sevenzip"
 	"github.com/hashicorp/golang-lru/v2"
+
+	"github.com/shabbybastard/polka/internal/ppmd8"
 )
 
 var (
@@ -57,7 +62,17 @@ func readLimited(r io.Reader, max int64) ([]byte, error) {
 type Library struct {
 	root string
 
-	covers *lru.Cache[int64, coverEntry] // bounded cover cache
+	covers *lru.Cache[int64, coverEntry] // bounded in-memory cover cache
+
+	// coverCacheDir persists extracted covers on disk so PPMd books are
+	// not unpacked again after a restart. Empty disables the disk cache.
+	coverCacheDir string
+	// coverLocks keeps concurrent requests for the same book (and a few
+	// neighbours) from extracting the same cover more than once.
+	coverLocks [64]sync.Mutex
+	// coverEpoch changes when the whole cache is dropped (catalog replace).
+	// A request that started against the old catalog must not repopulate it.
+	coverEpoch atomic.Uint64
 }
 
 type coverEntry struct {
@@ -377,12 +392,7 @@ func openFromArchive(path, name string) (io.ReadCloser, int64, error) {
 	names := make([]string, 0, len(zr.File))
 	for _, entry := range zr.File {
 		if strings.EqualFold(entry.Name, name) {
-			rc, err := entry.Open()
-			if err != nil {
-				zr.Close()
-				return nil, 0, err
-			}
-			return &zipEntryReader{rc: rc, zr: zr}, int64(entry.UncompressedSize64), nil
+			return openZipEntry(zr, entry)
 		}
 		if cand == nil && strings.EqualFold(entry.Name, stem) {
 			cand = entry
@@ -390,15 +400,87 @@ func openFromArchive(path, name string) (io.ReadCloser, int64, error) {
 		names = append(names, entry.Name)
 	}
 	if cand != nil {
-		rc, err := cand.Open()
+		return openZipEntry(zr, cand)
+	}
+	zr.Close()
+	return nil, 0, entryNotFound(name, names)
+}
+
+// zipPPMDMethod is ZIP compression method 98 (PPMd variant I).
+const zipPPMDMethod = 98
+
+// maxPPMDCompressed bounds the compressed payload read into memory before
+// handing it to the wasm decoder. PPMd can expand slightly on incompressible
+// input, so allow a little headroom over the output limit.
+const maxPPMDCompressed = ppmd8.MaxOutputSize + (4 << 20)
+
+// openZipEntry returns a reader for a ZIP entry. Store/Deflate entries are
+// streamed as before. PPMd (method 98) is decoded through the embedded wasm
+// codec; ZIP PPMd streams have no end marker, so they must be bounded by the
+// uncompressed size declared in the directory and are decoded in one go.
+func openZipEntry(zr *zip.ReadCloser, entry *zip.File) (io.ReadCloser, int64, error) {
+	if entry.Method != zipPPMDMethod {
+		rc, err := entry.Open()
 		if err != nil {
 			zr.Close()
 			return nil, 0, err
 		}
-		return &zipEntryReader{rc: rc, zr: zr}, int64(cand.UncompressedSize64), nil
+		return &zipEntryReader{rc: rc, zr: zr}, int64(entry.UncompressedSize64), nil
 	}
+	data, err := decodePPMDEntry(entry)
 	zr.Close()
-	return nil, 0, entryNotFound(name, names)
+	if err != nil {
+		return nil, 0, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+}
+
+// openZipEntryBorrowed is like openZipEntry but leaves zr open; used when
+// scanning an archive for the first matching entry (covers).
+func openZipEntryBorrowed(entry *zip.File) (io.ReadCloser, error) {
+	if entry.Method != zipPPMDMethod {
+		return entry.Open()
+	}
+	data, err := decodePPMDEntry(entry)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+// decodePPMDEntry decompresses one PPMd-compressed ZIP entry and verifies
+// its CRC. The entry metadata (sizes and CRC) comes from the central
+// directory, which archive/zip already validated against the local header.
+func decodePPMDEntry(entry *zip.File) ([]byte, error) {
+	if entry.UncompressedSize64 > ppmd8.MaxOutputSize {
+		return nil, fmt.Errorf("ppmd8: %q: %w", entry.Name, ppmd8.ErrTooLarge)
+	}
+	if entry.CompressedSize64 > maxPPMDCompressed {
+		return nil, fmt.Errorf("ppmd8: %q: compressed entry exceeds %d bytes",
+			entry.Name, maxPPMDCompressed)
+	}
+	raw, err := entry.OpenRaw()
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(raw, maxPPMDCompressed+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxPPMDCompressed {
+		return nil, fmt.Errorf("ppmd8: %q: compressed entry exceeds %d bytes",
+			entry.Name, maxPPMDCompressed)
+	}
+	out, err := ppmd8.Decode(data, int64(entry.UncompressedSize64))
+	if err != nil {
+		return nil, fmt.Errorf("ppmd8: %q: %w", entry.Name, err)
+	}
+	// Mirror archive/zip: CRC 0 means the writer did not set one (some
+	// streamed/data-descriptor ZIPs); don't reject those.
+	if entry.CRC32 != 0 && crc32.ChecksumIEEE(out) != entry.CRC32 {
+		return nil, fmt.Errorf("ppmd8: %q: %w", entry.Name, zip.ErrChecksum)
+	}
+	return out, nil
 }
 
 func open7z(path, name string) (io.ReadCloser, int64, error) {
@@ -538,9 +620,15 @@ func (l *Library) ReplaceBareEPUB(folder, file, ext string, data []byte) ([]byte
 	return old, nil
 }
 
-// ForgetCover drops a cached cover after the book file is edited.
+// ForgetCover drops a cached cover after the book file is edited. It waits
+// for an in-flight extraction so a request that started before the edit
+// cannot write the old cover back to disk.
 func (l *Library) ForgetCover(bookID int64) {
+	lock := l.coverLock(bookID)
+	lock.Lock()
+	defer lock.Unlock()
 	l.covers.Remove(bookID)
+	l.removeDiskCover(bookID)
 }
 
 // ForgetAllCovers drops the whole cover cache after a catalog replace.
@@ -548,34 +636,79 @@ func (l *Library) ForgetAllCovers() {
 	if l == nil {
 		return
 	}
+	for i := range l.coverLocks {
+		l.coverLocks[i].Lock()
+	}
+	defer func() {
+		for i := range l.coverLocks {
+			l.coverLocks[i].Unlock()
+		}
+	}()
+	l.coverEpoch.Add(1)
 	l.covers.Purge()
+	l.clearDiskCovers()
 }
 
 func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string, error) {
-	if c, ok := l.covers.Get(bookID); ok {
+	epoch := l.coverEpoch.Load()
+	if c, ok := l.covers.Get(bookID); ok && l.coverEpoch.Load() == epoch {
 		if c.data == nil {
 			return nil, "", ErrNoFile // negative cache
 		}
 		return c.data, c.mime, nil
 	}
 
+	// Serialise requests for the same book (and a few neighbours) so a burst
+	// of cover requests does not unpack the same PPMd book repeatedly.
+	lock := l.coverLock(bookID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// A catalog replace remapped book ids while this request was waiting;
+	// its folder/file no longer describe the same book.
+	if l.coverEpoch.Load() != epoch {
+		return nil, "", ErrNoFile
+	}
+
+	if c, ok := l.covers.Get(bookID); ok {
+		if c.data == nil {
+			return nil, "", ErrNoFile
+		}
+		return c.data, c.mime, nil
+	}
+
+	if data, mime, found, negative := l.loadDiskCover(bookID); found {
+		if negative {
+			l.covers.Add(bookID, coverEntry{})
+			return nil, "", ErrNoFile
+		}
+		l.rememberCover(bookID, data, mime)
+		return data, mime, nil
+	}
+
 	data, mime, err := l.extractCover(folder, file, ext)
 
 	if err == nil {
-		// Do not let a few huge covers dominate the LRU's memory budget.
-		if len(data) <= maxCachedCoverSize {
-			l.covers.Add(bookID, coverEntry{data: data, mime: mime})
-		}
+		l.rememberCover(bookID, data, mime)
+		l.saveDiskCover(bookID, data, mime)
 	} else if errors.Is(err, ErrNoFile) {
 		// Negative cache only for a genuinely missing cover; transient I/O
 		// errors must be retried on the next request.
 		l.covers.Add(bookID, coverEntry{})
+		l.saveNoCover(bookID)
 	}
 
 	if err != nil {
 		return nil, "", err
 	}
 	return data, mime, nil
+}
+
+// rememberCover fills the in-memory LRU, respecting its size budget.
+func (l *Library) rememberCover(bookID int64, data []byte, mime string) {
+	if len(data) <= maxCachedCoverSize {
+		l.covers.Add(bookID, coverEntry{data: data, mime: mime})
+	}
 }
 
 // sidecarCover looks for a cover in covers/<archive>.zip|7z (Flibusta layout).
@@ -661,7 +794,10 @@ func coverArchiveEntry(archivePath, bookid string) ([]byte, string, bool) {
 	}
 	defer zr.Close()
 	for _, e := range zr.File {
-		if d, m, ok := match(e.Name, e.Open); ok {
+		entry := e
+		if d, m, ok := match(entry.Name, func() (io.ReadCloser, error) {
+			return openZipEntryBorrowed(entry)
+		}); ok {
 			return d, m, true
 		}
 	}
@@ -688,6 +824,9 @@ func (l *Library) extractCover(folder, file, ext string) ([]byte, string, error)
 			return nil, "", ErrNoFile
 		}
 		data, mime := normalizeCover(meta.Cover, meta.CoverMime)
+		if mime == "" {
+			mime = sniffImageMime(data)
+		}
 		return data, mime, nil
 
 	case strings.EqualFold(ext, "epub"):
@@ -706,6 +845,9 @@ func (l *Library) extractCover(folder, file, ext string) ([]byte, string, error)
 			return nil, "", ErrNoFile
 		}
 		data, mime = normalizeCover(data, mime)
+		if mime == "" {
+			mime = sniffImageMime(data)
+		}
 		return data, mime, nil
 	}
 	return nil, "", ErrNoFile

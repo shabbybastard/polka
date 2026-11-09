@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -228,6 +230,98 @@ func TestAPIEndToEnd(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("missing book -> %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestPPMDZIPEndpoints is an end-to-end smoke test for PPMd-compressed ZIP
+// archives (ZIP method 98): download, cover and compact text all go through
+// library.Open and must work without any external 7-Zip binary.
+func TestPPMDZIPEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	libDir := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "library", "testdata", "ppmd-books.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(libDir, "books.zip"), fixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
+	session, err := st.NewImport(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Add(&store.BookInput{
+		Title: "PPMd Test Book", Folder: "books.zip", File: "1", Ext: "fb2",
+		Size: 671, Lang: "ru", Added: "2024-01-01",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	var bookID int64
+	if err := st.DB().QueryRow(`SELECT id FROM books`).Scan(&bookID); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := auth.Open(filepath.Join(dir, "users.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { users.Close() })
+	dataDir := filepath.Join(dir, "data")
+	cfg := &config.Config{LibraryDir: libDir, DataDir: dataDir, Auth: "public"}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	webFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html/>")}}
+	srv := New(cfg, log, st, library.New(libDir), users, nil, webFS)
+	ts := httptest.NewServer(srv.Handler)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/Images/fb2/" + itoa64(bookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "PPMd-compressed FB2") {
+		t.Fatalf("fb2 download: status=%d body=%q", resp.StatusCode, body)
+	}
+
+	resp, err = http.Get(ts.URL + "/Images/covers/" + itoa64(bookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cover, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/png" ||
+		!strings.HasPrefix(string(cover), "\x89PNG") {
+		t.Fatalf("cover: status=%d type=%q bytes=%d", resp.StatusCode, resp.Header.Get("Content-Type"), len(cover))
+	}
+	cached, err := filepath.Glob(filepath.Join(dataDir, "cover-cache", "*", fmt.Sprintf("%d.*", bookID)))
+	if err != nil || len(cached) != 1 {
+		t.Fatalf("cover cache files = %v, %v", cached, err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "cover-cache.generation")); err != nil {
+		t.Fatalf("cover cache generation: %v", err)
+	}
+
+	resp, err = http.Get(ts.URL + "/Images/fb2compact/" + itoa64(bookID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact download: status=%d", resp.StatusCode)
 	}
 }
 

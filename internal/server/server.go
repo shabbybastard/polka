@@ -105,6 +105,10 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 	} else if err := users.ApplyPendingRemap(context.Background(), generation); err != nil {
 		log.Error("pending book remap", "error", err)
 	}
+	s.setupCoverCache(context.Background())
+	if s.lib != nil && cfg.DataDir != "" {
+		go s.coverCacheLoop(context.Background())
+	}
 	if cfg.DataDir == "" {
 		// tests without a data directory: collections are unavailable
 	} else {

@@ -1,4 +1,4 @@
-.PHONY: all web build run test clean
+.PHONY: all web build run test clean ppmd-wasm
 
 # An exact tag wins; otherwise the fork version from VERSION is used.
 TAG_VERSION := $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//')
@@ -19,6 +19,11 @@ all: build
 
 web:
 	cd web && npm install && npm run build
+
+# Rebuild the embedded PPMd8 wasm decoder (only needed when the vendored
+# 7-Zip sources or the shim change). Normal builds use the committed file.
+ppmd-wasm:
+	./internal/ppmd8/csrc/build.sh
 
 build: web
 	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/polka ./cmd/polka
