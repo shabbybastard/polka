@@ -78,6 +78,10 @@ const Root = () => {
     return <LoginPage onLogin={setUser} />;
   }
 
+  // The desktop owner is always a local admin, but admin controls must not
+  // leak into a client connected to somebody else's server.
+  const canAdmin = user?.role === "admin" && !sync;
+
   const layout = (children) => (
     <>
       <TopBar
@@ -126,7 +130,7 @@ const Root = () => {
         <Route
           path="/admin/users"
           element={
-            user?.role === "admin" && !isDesktop
+            canAdmin && !isDesktop
               ? <Navigate to="/admin/library?tab=users" replace />
               : <Navigate to="/" replace />
           }
@@ -134,7 +138,7 @@ const Root = () => {
         <Route
           path="/admin/library"
           element={
-            user?.role === "admin" ? layout(<AdminLibraryPage me={user} desktop={isDesktop} onConfigChange={loadConfig} />) : <Navigate to="/" replace />
+            canAdmin ? layout(<AdminLibraryPage me={user} desktop={isDesktop} onConfigChange={loadConfig} />) : <Navigate to="/" replace />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

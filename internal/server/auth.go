@@ -232,6 +232,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"enabled": true,
 			"online":  s.sync.Online(),
 			"server":  s.sync.Server(),
+			"login":   s.sync.Login(),
 		}
 	}
 	writeJSON(w, resp)

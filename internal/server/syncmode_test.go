@@ -168,6 +168,9 @@ func TestSyncModeOfflineAndOnline(t *testing.T) {
 	up := newUpstream(t)
 	client, users, _ := newDesktopClient(t, up)
 	ctx := context.Background()
+	if err := up.users.SetSetting(ctx, "home.hero", "0"); err != nil {
+		t.Fatal(err)
+	}
 	id := up.bookID
 	idStr := itoa64(id)
 
@@ -205,6 +208,10 @@ func TestSyncModeOfflineAndOnline(t *testing.T) {
 	if code != 200 || info["online"] != true || info["lastSync"] == nil {
 		t.Fatalf("sync/now: %d %s", code, data)
 	}
+	_, data, _ = statusOf(t, "GET", client.URL+"/auth/me", "")
+	if syncInfo, _ := jsonOf(t, data)["sync"].(map[string]any); syncInfo["login"] != upstreamLogin {
+		t.Errorf("sync login: %s", data)
+	}
 
 	// Catalog is proxied to the upstream with the stored credentials.
 	_, data, _ = statusOf(t, "GET", client.URL+"/main/getBooks/getHomeShelves", "")
@@ -220,7 +227,8 @@ func TestSyncModeOfflineAndOnline(t *testing.T) {
 		t.Errorf("proxied book form: %s", data)
 	}
 	_, data, _ = statusOf(t, "GET", client.URL+"/main/getBooks/getConfig", "")
-	if jsonOf(t, data)["numberOfBooks"].(float64) != 1 {
+	onlineConfig := jsonOf(t, data)
+	if onlineConfig["numberOfBooks"].(float64) != 1 || onlineConfig["homeHero"] != false {
 		t.Errorf("proxied config: %s", data)
 	}
 	if code, _, _ := statusOf(t, "GET", client.URL+"/Images/fb2/"+idStr, ""); code != 200 {
@@ -275,8 +283,9 @@ func TestSyncModeOfflineAndOnline(t *testing.T) {
 		t.Errorf("offline home must show the offline shelf: %s", data)
 	}
 	_, data, _ = statusOf(t, "GET", client.URL+"/main/getBooks/getConfig", "")
-	if jsonOf(t, data)["numberOfBooks"].(float64) != 1 {
-		t.Errorf("offline config counts cached books: %s", data)
+	offlineConfig := jsonOf(t, data)
+	if offlineConfig["numberOfBooks"].(float64) != 1 || offlineConfig["homeHero"] != false {
+		t.Errorf("offline config counts cached books and keeps homeHero: %s", data)
 	}
 	_, data, _ = statusOf(t, "GET", client.URL+"/main/getBooks/getBookForm?selectedItemID="+idStr, "")
 	form := jsonOf(t, data)["bookForm"].(map[string]any)

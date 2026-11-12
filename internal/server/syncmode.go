@@ -129,13 +129,27 @@ func (s *Server) resolveBooksJSON(r *http.Request, ids []int64) []map[string]any
 
 func (s *Server) syncGetConfig(w http.ResponseWriter, r *http.Request) {
 	if s.sync.Online() {
-		s.sync.Proxy(w, r)
-		return
+		if cfg, err := s.sync.GetConfig(r.Context()); err == nil {
+			if hero, ok := cfg["homeHero"].(bool); ok {
+				value := "1"
+				if !hero {
+					value = "0"
+				}
+				if err := s.users.SetSetting(r.Context(), "sync.home_hero", value); err != nil {
+					s.log.Warn("sync home hero", "error", err)
+				}
+			}
+			writeJSON(w, cfg)
+			return
+		} else {
+			s.log.Warn("sync config", "error", err)
+		}
 	}
 	books, _ := s.sync.OfflineBooks(r.Context())
 	writeJSON(w, map[string]any{
 		"collectionName": tr(reqLang(r), "collection.offline"),
 		"numberOfBooks":  len(books),
+		"homeHero":       s.users.GetSetting(r.Context(), "sync.home_hero", "1") == "1",
 	})
 }
 

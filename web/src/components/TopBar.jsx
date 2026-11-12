@@ -144,7 +144,7 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
 
         {user && (
           <div className="topbar__user">
-            {user.role === "admin" && (
+            {user.role === "admin" && !sync && (
               <Link
                 to="/admin/library"
                 className={`btn btn-link topbar__admin ${isActive("/admin/library") ? "is-active" : ""}`}
@@ -154,8 +154,8 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
                 <span className="topbar__admin-text">{t("nav.manage")}</span>
               </Link>
             )}
-            <span className="topbar__user-name" title={user.login}>
-              {desktop ? t("owner") : user.displayName || user.login}
+            <span className="topbar__user-name" title={sync?.login || user.login}>
+              {sync?.login || (desktop ? t("owner") : user.displayName || user.login)}
             </span>
             {onLogout && (
               <button type="button" className="btn btn-link topbar__logout" onClick={onLogout}>

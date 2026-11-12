@@ -44,7 +44,7 @@ const HomePage = ({ config }) => {
 
   return (
     <div className="container homepage">
-      {config?.homeHero !== false && (
+      {config && config.homeHero !== false && (
         <section className="hero">
           <div className="hero__content">
             <p className="hero__eyebrow">{t("home.eyebrow")}</p>

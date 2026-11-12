@@ -222,7 +222,27 @@ func (s *Syncer) Close() error {
 
 func (s *Syncer) Server() string { return s.cfg.Server }
 
+func (s *Syncer) Login() string { return s.cfg.Login }
+
 func (s *Syncer) Online() bool { return s.online.Load() }
+
+// GetConfig fetches the catalog config from the server. Used by sync mode to
+// keep local offline fallbacks (such as the home hero switch) in sync.
+func (s *Syncer) GetConfig(ctx context.Context) (map[string]any, error) {
+	resp, err := s.request(ctx, http.MethodGet, "/main/getBooks/getConfig", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("config: HTTP %d", resp.StatusCode)
+	}
+	var cfg map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
 
 func (s *Syncer) LastSync() time.Time {
 	t, _ := s.lastSync.Load().(time.Time)

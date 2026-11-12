@@ -46,11 +46,11 @@ mobile reading app.
   a reader's progress when a position is no longer wanted, bulk-load external
   genres for the whole catalog or only for books without genres, and manually
   warm the external rating cache (throttled server-side jobs).
-- **Library maintenance.** Scan the catalog for EPUBs written by converters
-  that emit self-closing XHTML tags (`<title/>` and similar) and rewrite bare
-  `.epub` files in place. Books inside ZIP/7z archives are reported but not
-  modified; the online reader normalizes them on the fly. Originals are backed
-  up for seven days.
+- **Library maintenance.** Scan and repair EPUBs written by converters that
+  emit self-closing XHTML tags (`<title/>` and similar), find empty or damaged
+  metadata and books without covers. Only bare `.epub` files are rewritten;
+  books inside ZIP/7z archives are reported but not modified, and the online
+  reader normalizes them on the fly. Originals are backed up for seven days.
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
@@ -65,7 +65,8 @@ mobile reading app.
   (kosync): KOReader on PocketBook, Kindle, Kobo, reMarkable and friends
   pushes the reading position straight to your server, and books read on
   the device show their progress on Polka's "Reading now" shelf. Each user
-  sets a device password on the **E-reader** tab.
+  sets a device password on the **E-reader** tab, which also lists connected
+  devices and the last sync time.
 - **Send to your e-reader.** Configure SMTP once and e-mail any book straight
   to your Kindle / Kobo / PocketBook from its page (the SMTP password is stored
   encrypted).
@@ -88,6 +89,8 @@ mobile reading app.
   live right on your machine — no server, no account, no internet required.
   Optionally connect them to your Polka server later and get two-way sync of
   progress, ratings, and lists, including offline copies of selected books.
+  In connected mode the client shows the server login and hides local admin
+  controls, so a third-party server cannot be administered from the client.
 
 ## Quick start
 
@@ -149,7 +152,7 @@ make build        # builds web UI + bin/polka + bin/polka-desktop
 ## Importing a large catalog
 
 Polka understands `.inpx` index files (MyHomeLib / Flibusta format) — both
-from the command line and from the web UI (*Manage → Import*):
+from the command line and from the web UI (*Manage → Books → Import*):
 
 ```sh
 polka import --inpx collection.inpx --data-dir /path/to/data --library-dir /path/to/archives
@@ -157,7 +160,7 @@ polka import --inpx collection.inpx --data-dir /path/to/data --library-dir /path
 
 You can also import an inpx that already sits on the server (e.g. a
 mounted or NFS collection) straight from the web UI — paste its path in
-*Manage → Import* instead of uploading. The book archives are looked up
+*Manage → Books → Import* instead of uploading. The book archives are looked up
 under `--library-dir`.
 
 Book files may sit in plain folders or inside **ZIP or 7z archives** (the
@@ -181,6 +184,11 @@ app window on Linux) and can work two ways:
 - **Connected** — point it at your Polka server (*Server* page in the app):
   the full catalog is available online, selected books are downloaded for
   offline reading, and progress / ratings / lists sync both ways automatically.
+
+Standalone data lives in `%AppData%\polka` and books in
+`%UserProfile%\Polka\books` on Windows; on Linux the same directories are
+`~/.config/polka` and `~/Polka/books`. Both can be changed with
+`--data-dir` and `--library-dir`.
 
 ## Editing EPUB metadata
 
@@ -258,7 +266,9 @@ uploads are admin-only, limited to 20 MB per file and 50 per hour per user
 Telegram's menu button (the side command list), and each book card is sent
 as one HTML-formatted photo/caption message. The bot shows covers, metadata,
 Polka ratings, reading progress and search results, but it never sends book
-files. Temporary downloads are deleted after ingestion.
+files. Temporary downloads are deleted after ingestion. When an uploaded FB2
+is queued for conversion, the bot reports the final result: the book was
+added to the library, was already there, or conversion failed.
 
 ## Tech notes
 
@@ -293,8 +303,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.9`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.9`, and the version for local
+(current: `v0.1.22-fork.10`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.10`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

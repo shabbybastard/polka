@@ -49,6 +49,7 @@ const safeExternalUrl = (value) => {
 const BookPage = ({ user, sync }) => {
   const { bookId } = useParams();
   const navigate = useNavigate();
+  const canAdmin = user?.role === "admin" && !sync;
 
   // Офлайн-кэш (только в режиме синхронизации десктоп-клиента)
   const [isOffline, setIsOffline] = useState(false);
@@ -441,7 +442,7 @@ const BookPage = ({ user, sync }) => {
       setEnrichment(res ?? null);
       // GET is read-only; persist the tags with an explicit POST, then pick
       // the new genre list up immediately, like ratings.
-      if (!res?.tags?.length || user?.role !== "admin") return;
+      if (!res?.tags?.length || !canAdmin) return;
       saveExternalGenres(bookId)
         .then(() => fetchBookForm({ selectedItemID: bookId }))
         .then((form) => {
@@ -461,7 +462,7 @@ const BookPage = ({ user, sync }) => {
         })
         .catch(() => {});
     },
-    [bookId, user?.role]
+    [bookId, canAdmin]
   );
 
   // Administrator action: re-fetch ratings, links, tags and similar books
@@ -829,7 +830,7 @@ const BookPage = ({ user, sync }) => {
               )}
             </div>
 
-            {user?.role === "admin" && (
+            {canAdmin && (
               <div className="book-page__actions-row book-page__actions-row--tools">
                 <button type="button" className="btn btn-ghost book-page__edit" onClick={openEditor}>
                   {t("book.edit")}
