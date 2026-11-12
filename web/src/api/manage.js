@@ -67,6 +67,15 @@ export const refreshBookEnrichment = (id) =>
 
 export const checkSources = () => post("admin/sources/check");
 
+export const startEPUBMaintenance = (mode, { deep = false } = {}) => {
+  const params = new URLSearchParams({ mode });
+  if (deep) params.set("deep", "1");
+  return post(`admin/maintenance/epub?${params.toString()}`);
+};
+
+export const epubMaintenanceStatus = () => api.getJson("admin/maintenance/epub/status");
+export const stopEPUBMaintenance = () => post("admin/maintenance/epub/stop");
+
 export const importInpx = ({ file, path, replace } = {}) => {
   const fd = new FormData();
   if (file) fd.append("file", file);

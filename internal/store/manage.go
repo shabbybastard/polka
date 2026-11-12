@@ -239,6 +239,21 @@ func (s *Store) UpdateBookFile(ctx context.Context, bookID int64, lang string, y
 	return nil
 }
 
+// UpdateBookFileSizeHash updates only the size and file hash after an
+// in-place rewrite of a book file.
+func (s *Store) UpdateBookFileSizeHash(ctx context.Context, bookID int64, size int64, fileHash string) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE books SET size = ?, file_hash = ?
+		WHERE id = ? AND deleted = 0`, size, fileHash, bookID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteBookDigests invalidates KOReader positions tied to the old file.
 func (s *Store) DeleteBookDigests(ctx context.Context, bookID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM book_digests WHERE book_id = ?`, bookID)
@@ -429,6 +444,38 @@ func (s *Store) BooksForEnrichment(ctx context.Context, afterID int64, limit int
 		where += ` AND NOT EXISTS (SELECT 1 FROM book_genres bg WHERE bg.book_id = b.id)`
 	}
 	return s.queryBooks(ctx, where, `b.id`, limit, 0, afterID)
+}
+
+// BooksForEPUBMaintenance walks EPUB books in id order for the maintenance
+// job. It returns only the fields needed to locate and rewrite the file.
+func (s *Store) BooksForEPUBMaintenance(ctx context.Context, afterID int64, limit int) ([]BookFile, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size
+		FROM books b JOIN folders fo ON fo.id = b.folder_id
+		WHERE b.deleted = 0 AND lower(b.ext) = 'epub' AND b.id > ?
+		ORDER BY b.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BookFile
+	for rows.Next() {
+		var f BookFile
+		if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// EPUBCount returns the number of visible EPUB books for the maintenance
+// progress bar.
+func (s *Store) EPUBCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM books WHERE deleted = 0 AND lower(ext) = 'epub'`).Scan(&n)
+	return n, err
 }
 
 // BooksWithoutGenresCount is the total for the "only empty" bulk job.

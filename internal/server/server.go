@@ -39,6 +39,7 @@ type Server struct {
 	imp         importState          // state of the background inpx web import
 	genreSync   genreSyncState       // background external genre loading
 	ratingSync  ratingSyncState      // manual external rating cache warming
+	epubFix     epubMaintenanceState // background EPUB repair job
 	reader      readerCache          // parsed books for online reading
 	basic       basicCache           // verified Basic credentials (OPDS)
 	genres      genreCache           // genre counters for search
@@ -194,6 +195,9 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 			"GET /admin/genres/status",
 			"POST /admin/ratings/sync",
 			"GET /admin/ratings/status",
+			"POST /admin/maintenance/epub",
+			"GET /admin/maintenance/epub/status",
+			"POST /admin/maintenance/epub/stop",
 		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 				if !s.sync.Online() {
@@ -287,6 +291,9 @@ func NewWithApp(cfg *config.Config, log *slog.Logger, st *store.Store, lib *libr
 			mux.HandleFunc("POST /admin/ratings/sync", s.adminOnly(s.handleRatingSyncStart))
 			mux.HandleFunc("GET /admin/ratings/status", s.adminOnly(s.handleRatingSyncStatus))
 			mux.HandleFunc("POST /admin/sources/check", s.adminOnly(s.handleSourcesCheck))
+			mux.HandleFunc("POST /admin/maintenance/epub", s.adminOnly(s.handleEPUBMaintenanceStart))
+			mux.HandleFunc("GET /admin/maintenance/epub/status", s.adminOnly(s.handleEPUBMaintenanceStatus))
+			mux.HandleFunc("POST /admin/maintenance/epub/stop", s.adminOnly(s.handleEPUBMaintenanceStop))
 		}
 
 		// User data state for desktop clients

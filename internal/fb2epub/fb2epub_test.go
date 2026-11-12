@@ -79,6 +79,12 @@ func TestConvert(t *testing.T) {
 	if zr.File[0].Name != "mimetype" || zr.File[0].Method != zip.Store || files["mimetype"] != "application/epub+zip" {
 		t.Error("mimetype entry is not first/uncompressed")
 	}
+	for name, content := range files {
+		if strings.HasPrefix(name, "OEBPS/text/") &&
+			(strings.Contains(content, "<title/>") || strings.Contains(content, "<title />")) {
+			t.Errorf("%s has a self-closing title", name)
+		}
+	}
 	for _, want := range []string{"OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx", "OEBPS/text/cover.xhtml", "OEBPS/text/notes.xhtml"} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("missing %s", want)

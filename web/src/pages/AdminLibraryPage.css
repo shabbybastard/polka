@@ -647,3 +647,27 @@
   flex: 1;
   min-width: 0;
 }
+
+.library-admin__maintenance-deep {
+  margin-top: 8px;
+}
+
+.library-admin__maintenance-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--fg-muted, #777);
+}
+
+.library-admin__maintenance-examples {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.library-admin__maintenance-examples ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--danger, #b3261e);
+}

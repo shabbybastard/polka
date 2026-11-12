@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,35 @@ func (s *Server) backupEPUB(bookID int64, data []byte) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, name))
+}
+
+// backupEPUBFile copies a bare EPUB into the same seven-day backup store
+// without loading it into memory. Used by the maintenance job.
+func (s *Server) backupEPUBFile(bookID int64, srcPath string) error {
+	dir := filepath.Join(s.cfg.DataDir, backupDirName, strconv.FormatInt(bookID, 10))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	name := time.Now().UTC().Format("20060102-150405.000000") + ".epub"
+	tmp, err := os.CreateTemp(dir, ".backup-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := io.Copy(tmp, src); err != nil {
 		tmp.Close()
 		return err
 	}

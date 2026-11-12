@@ -42,6 +42,11 @@ mobile reading app.
   a reader's progress when a position is no longer wanted, bulk-load external
   genres for the whole catalog or only for books without genres, and manually
   warm the external rating cache (throttled server-side jobs).
+- **Library maintenance.** Scan the catalog for EPUBs written by converters
+  that emit self-closing XHTML tags (`<title/>` and similar) and rewrite bare
+  `.epub` files in place. Books inside ZIP/7z archives are reported but not
+  modified; the online reader normalizes them on the fly. Originals are backed
+  up for seven days.
 - **Curated collections.** Well-known book lists — *100 Books of the Century*
   (Le Monde), BBC's *The Big Read*, the Norwegian Book Club's *100 best books*
   and more — ship with Polka and appear as home-page shelves showing which of
@@ -284,8 +289,8 @@ upstream v0.1.22; upstream features may be pulled in selectively when they are
 worth taking.
 
 Fork releases use the version pattern `v<upstream>-fork.<n>`
-(current: `v0.1.22-fork.8`). The binary reports the same version without the
-leading `v`, deb/rpm packages use `0.1.22+fork.8`, and the version for local
+(current: `v0.1.22-fork.9`). The binary reports the same version without the
+leading `v`, deb/rpm packages use `0.1.22+fork.9`, and the version for local
 `make build` is stored in [`VERSION`](VERSION); release tags should match it.
 
 ## Neuroslop warning

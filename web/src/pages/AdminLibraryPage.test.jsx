@@ -6,6 +6,7 @@ import AdminLibraryPage from "./AdminLibraryPage";
 
 vi.mock("../api/manage", () => ({
   checkSources: vi.fn(),
+  epubMaintenanceStatus: vi.fn(),
   fetchConversions: vi.fn(),
   fetchSettings: vi.fn(),
   genreSyncStatus: vi.fn(),
@@ -13,6 +14,8 @@ vi.mock("../api/manage", () => ({
   importStatus: vi.fn(),
   ratingSyncStatus: vi.fn(),
   saveSettings: vi.fn(),
+  startEPUBMaintenance: vi.fn(),
+  stopEPUBMaintenance: vi.fn(),
   syncGenres: vi.fn(),
   syncRatings: vi.fn(),
   testSmtp: vi.fn(),
@@ -36,12 +39,15 @@ vi.mock("../api/auth", () => ({
 
 import {
   checkSources,
+  epubMaintenanceStatus,
   fetchConversions,
   fetchSettings,
   genreSyncStatus,
   importStatus,
   ratingSyncStatus,
   saveSettings,
+  startEPUBMaintenance,
+  stopEPUBMaintenance,
 } from "../api/manage";
 import { fetchCollections } from "../api/collections";
 import { fetchUsers } from "../api/auth";
@@ -64,6 +70,7 @@ const mockBase = () => {
   importStatus.mockResolvedValue({ running: false });
   genreSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
   ratingSyncStatus.mockResolvedValue({ running: false, processed: 0, total: 0, updated: 0 });
+  epubMaintenanceStatus.mockResolvedValue({ running: false, processed: 0, total: 0 });
   fetchCollections.mockResolvedValue({ collections: [] });
 };
 
@@ -185,5 +192,20 @@ describe("AdminLibraryPage", () => {
     await waitFor(() => expect(checkSources).toHaveBeenCalled());
     expect((await screen.findAllByText(new RegExp(t("admin.sources.state.error")))).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(new RegExp(t("admin.sources.state.missingKey")))).length).toBeGreaterThan(0);
+  });
+
+  it("starts an EPUB maintenance scan", async () => {
+    mockBase();
+    startEPUBMaintenance.mockResolvedValue({ started: true });
+
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.maintenance") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.maintenance.scan") }));
+    await waitFor(() => expect(startEPUBMaintenance).toHaveBeenCalledWith("scan", { deep: true }));
   });
 });

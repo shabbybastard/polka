@@ -5,6 +5,7 @@ import AdminUsersPage from "./AdminUsersPage";
 import { Link } from "react-router-dom";
 import {
   checkSources,
+  epubMaintenanceStatus,
   fetchConversions,
   fetchSettings,
   genreSyncStatus,
@@ -12,6 +13,8 @@ import {
   importStatus,
   ratingSyncStatus,
   saveSettings,
+  startEPUBMaintenance,
+  stopEPUBMaintenance,
   syncGenres,
   syncRatings,
   testSmtp,
@@ -80,8 +83,8 @@ const conversionSignature = (jobs) =>
 const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const VALID_TABS = desktop
-    ? ["books", "import", "collections", "sources", "readers", "appearance"]
-    : ["books", "import", "collections", "sources", "users", "readers", "appearance"];
+    ? ["books", "import", "collections", "sources", "readers", "appearance", "maintenance"]
+    : ["books", "import", "collections", "sources", "users", "readers", "appearance", "maintenance"];
   const tab = VALID_TABS.includes(searchParams.get("tab")) ? searchParams.get("tab") : "books";
   const selectTab = (id) => setSearchParams(id === "books" ? {} : { tab: id }, { replace: true });
   // --- Book upload ---
@@ -321,6 +324,52 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       }
     };
   }, []);
+
+  const [maintenanceStatus, setMaintenanceStatus] = useState(null);
+  const [maintenanceDeep, setMaintenanceDeep] = useState(true);
+  const maintenancePolling = useRef(null);
+
+  const pollMaintenanceStatus = () => {
+    epubMaintenanceStatus()
+      .then((st) => {
+        setMaintenanceStatus(st);
+        if (st.running) {
+          if (!maintenancePolling.current) {
+            maintenancePolling.current = setInterval(pollMaintenanceStatus, 1000);
+          }
+        } else if (maintenancePolling.current) {
+          clearInterval(maintenancePolling.current);
+          maintenancePolling.current = null;
+        }
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    pollMaintenanceStatus();
+    return () => {
+      if (maintenancePolling.current) {
+        clearInterval(maintenancePolling.current);
+        maintenancePolling.current = null;
+      }
+    };
+  }, []);
+
+  const startMaintenance = (mode) => {
+    if (maintenanceStatus?.running) return;
+    if (mode === "fix" && !confirm(t("admin.maintenance.confirmFix"))) return;
+    startEPUBMaintenance(mode, { deep: maintenanceDeep })
+      .then(() => pollMaintenanceStatus())
+      .catch((err) =>
+        alert(err.status === 409 ? t("admin.maintenance.running") : t("admin.maintenance.startFail"))
+      );
+  };
+
+  const stopMaintenance = () => {
+    stopEPUBMaintenance()
+      .then(() => pollMaintenanceStatus())
+      .catch(() => alert(t("admin.maintenance.startFail")));
+  };
 
   useEffect(() => {
     fetchSettings()
@@ -578,6 +627,11 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       ? Math.min(100, Math.round((Number(ratingStatus.processed) / Number(ratingStatus.total)) * 100))
       : 0;
 
+  const maintenancePercent =
+    maintenanceStatus && Number(maintenanceStatus.total) > 0
+      ? Math.min(100, Math.round((Number(maintenanceStatus.processed) / Number(maintenanceStatus.total)) * 100))
+      : 0;
+
   const conversionQueued = conversionJobs.filter((job) => job.status === "queued").length;
   const conversionProcessing = conversionJobs.filter((job) => job.status === "processing").length;
   const conversionActive = conversionQueued + conversionProcessing > 0;
@@ -619,6 +673,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
           ...(desktop ? [] : [{ id: "users", label: t("admin.tab.users") }]),
           { id: "readers", label: t("admin.tab.readers") },
           { id: "appearance", label: t("admin.tab.appearance") },
+          { id: "maintenance", label: t("admin.tab.maintenance") },
         ].map((tb) => (
           <button
             key={tb.id}
@@ -1388,6 +1443,112 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
               )}
             </div>
           </>
+        )}
+      </section>
+      )}
+
+      {tab === "maintenance" && (
+      <section className="library-admin__section">
+        <h2>{t("admin.maintenance")}</h2>
+        <p className="library-admin__hint">{t("admin.maintenance.hint")}</p>
+        <div className="library-admin__genre-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => startMaintenance("scan")}
+            disabled={Boolean(maintenanceStatus?.running)}
+          >
+            {t("admin.maintenance.scan")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => startMaintenance("fix")}
+            disabled={Boolean(maintenanceStatus?.running)}
+          >
+            {t("admin.maintenance.fix")}
+          </button>
+          {maintenanceStatus?.running && (
+            <button type="button" className="btn btn-ghost" onClick={stopMaintenance}>
+              {t("admin.maintenance.stop")}
+            </button>
+          )}
+        </div>
+        <label className="library-admin__source library-admin__maintenance-deep">
+          <input
+            type="checkbox"
+            checked={maintenanceDeep}
+            onChange={(e) => setMaintenanceDeep(e.target.checked)}
+            disabled={Boolean(maintenanceStatus?.running)}
+          />
+          <span className="library-admin__source-name">{t("admin.maintenance.deep")}</span>
+        </label>
+        {maintenanceStatus && maintenanceStatus.mode && (
+          <div className="library-admin__genre-status">
+            <div className="library-admin__genre-status-head">
+              <span className="library-admin__genre-mode">
+                {maintenanceStatus.mode === "fix"
+                  ? t("admin.maintenance.modeFix")
+                  : t("admin.maintenance.modeScan")}
+              </span>
+              <span className="library-admin__genre-progress">
+                {t("admin.maintenance.progress", {
+                  processed: Number(maintenanceStatus.processed).toLocaleString(),
+                  total: Number(maintenanceStatus.total).toLocaleString(),
+                })}
+              </span>
+            </div>
+            <div
+              className="library-admin__genre-bar"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax={Number(maintenanceStatus.total) || 0}
+              aria-valuenow={Number(maintenanceStatus.processed) || 0}
+            >
+              <span
+                className={maintenanceStatus.running ? "is-running" : maintenanceStatus.stopped ? "is-error" : ""}
+                style={{ width: `${maintenancePercent}%` }}
+              />
+            </div>
+            <div className="library-admin__maintenance-counts">
+              <span>{t("admin.maintenance.needsFix", { n: Number(maintenanceStatus.needsFix).toLocaleString() })}</span>
+              <span>{t("admin.maintenance.fixed", { n: Number(maintenanceStatus.fixed).toLocaleString() })}</span>
+              <span>{t("admin.maintenance.archived", { n: Number(maintenanceStatus.archived).toLocaleString() })}</span>
+              <span>{t("admin.maintenance.unreadable", { n: Number(maintenanceStatus.unreadable).toLocaleString() })}</span>
+              <span>{t("admin.maintenance.failed", { n: Number(maintenanceStatus.failed).toLocaleString() })}</span>
+            </div>
+            {maintenanceStatus.stopped && (
+              <div className="library-admin__status-note">{t("admin.maintenance.stopped")}</div>
+            )}
+            {maintenanceStatus.error && (
+              <div className="library-admin__genre-error">{maintenanceStatus.error}</div>
+            )}
+            {maintenanceStatus.examples?.length > 0 && (
+              <div className="library-admin__maintenance-examples">
+                <div className="library-admin__hint">{t("admin.maintenance.examples")}</div>
+                <ul>
+                  {maintenanceStatus.examples.map((example, i) => (
+                    <li key={i}>{example}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!maintenanceStatus.running && (
+              <div className="library-admin__status-close">
+                {maintenanceStatus.mode === "fix"
+                  ? maintenanceStatus.fixed > 0
+                    ? t("admin.maintenance.doneFix")
+                    : maintenanceStatus.failed > 0
+                      ? ""
+                      : t("admin.maintenance.noProblems")
+                  : maintenanceStatus.needsFix > 0 ||
+                      maintenanceStatus.unreadable > 0 ||
+                      maintenanceStatus.failed > 0
+                    ? ""
+                    : t("admin.maintenance.noProblems")}
+              </div>
+            )}
+          </div>
         )}
       </section>
       )}

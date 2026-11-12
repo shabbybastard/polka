@@ -492,7 +492,48 @@ func (z *zipEntryReader) Close() error {
 	return z.zr.Close()
 }
 
-// Cover returns a book cover (for fb2), cached in memory.
+// BareFilePath returns the on-disk path of a book stored as a plain file
+// (not an entry inside a ZIP/7z archive). Maintenance jobs use it to rewrite
+// the file in place.
+func (l *Library) BareFilePath(folder, file, ext string) (string, error) {
+	name := file + "." + ext
+	if l == nil || !pathInside(l.root, folder) || strings.ContainsAny(name, `/\`) {
+		return "", fmt.Errorf("%w: %s/%s", ErrNoFile, folder, name)
+	}
+	dir := filepath.Join(l.root, filepath.FromSlash(folder))
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%w: %s/%s", ErrNoFile, folder, name)
+	}
+	target := filepath.Join(dir, name)
+	fi, err = os.Stat(target)
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: %s/%s", ErrNoFile, folder, name)
+	}
+	return target, nil
+}
+
+// ReplaceBareEPUBFile atomically replaces a bare EPUB with srcPath. The
+// source file must be on the same filesystem (normally a temp file created
+// in the book's directory).
+func (l *Library) ReplaceBareEPUBFile(folder, file, ext, srcPath string) error {
+	if !strings.EqualFold(ext, "epub") {
+		return ErrNotBareFile
+	}
+	target, err := l.BareFilePath(folder, file, ext)
+	if err != nil {
+		return ErrNotBareFile
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(srcPath, fi.Mode().Perm()); err != nil {
+		return err
+	}
+	return os.Rename(srcPath, target)
+}
+
 // ReplaceBareEPUB atomically replaces a bare EPUB file and returns its
 // previous contents. Files inside ZIP/7z archives cannot be edited.
 func (l *Library) ReplaceBareEPUB(folder, file, ext string, data []byte) ([]byte, error) {

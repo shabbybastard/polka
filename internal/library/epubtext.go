@@ -123,7 +123,7 @@ func EPUBText(r io.ReaderAt, size int64, imgURL func(string) string) (*FB2Text, 
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", docPath, err)
 		}
-		title, body := epubChapterHTML(bytes.NewReader(chapter), path.Dir(docPath), imgURL, imgDims)
+		title, body := epubChapterHTML(chapter, path.Dir(docPath), imgURL, imgDims)
 		if strings.TrimSpace(body) == "" {
 			continue
 		}
@@ -204,10 +204,237 @@ func htmlFragmentText(fragment string) string {
 	}
 }
 
+// Some FB2 -> EPUB converters write XHTML with self-closing raw-text tags
+// (<title/>, <script/>, ...). The HTML parser does not close these on "/>",
+// so everything after <title/> becomes text inside <title> and the real
+// <body> stays empty. Expand them to explicit open/close pairs first.
+//
+// <plaintext> is special: the HTML parser never closes it, so an open/close
+// pair would still swallow the rest of the document. An empty self-closing
+// <plaintext/> is simply removed.
+var (
+	// Tags that must be expanded when written as self-closing XHTML. This
+	// includes head/template: they are not raw-text elements, but a
+	// self-closing form confuses the HTML parser just the same.
+	xhtmlSelfClosingTags = map[string]bool{
+		"title": true, "script": true, "style": true, "textarea": true,
+		"iframe": true, "xmp": true, "noembed": true, "noframes": true,
+		"noscript": true, "head": true, "template": true, "plaintext": true,
+	}
+	// Elements whose content the HTML parser treats as raw text. Their
+	// contents must not be scanned for nested tags.
+	xhtmlRawTextTags = map[string]bool{
+		"title": true, "script": true, "style": true, "textarea": true,
+		"iframe": true, "xmp": true, "noembed": true, "noframes": true,
+		"noscript": true, "plaintext": true,
+	}
+)
+
+func normalizeXHTML(data []byte) []byte {
+	var out bytes.Buffer
+	out.Grow(len(data))
+	for i := 0; i < len(data); {
+		if data[i] != '<' {
+			out.WriteByte(data[i])
+			i++
+			continue
+		}
+		// Comments and CDATA are copied verbatim.
+		if bytes.HasPrefix(data[i:], []byte("<!--")) {
+			end := bytes.Index(data[i+4:], []byte("-->"))
+			if end < 0 {
+				out.Write(data[i:])
+				return out.Bytes()
+			}
+			end = i + 4 + end + 3
+			out.Write(data[i:end])
+			i = end
+			continue
+		}
+		if bytes.HasPrefix(data[i:], []byte("<![CDATA[")) {
+			end := bytes.Index(data[i+9:], []byte("]]>"))
+			if end < 0 {
+				out.Write(data[i:])
+				return out.Bytes()
+			}
+			end = i + 9 + end + 3
+			out.Write(data[i:end])
+			i = end
+			continue
+		}
+		// Doctype / processing instruction / other declaration.
+		if i+1 < len(data) && (data[i+1] == '!' || data[i+1] == '?') {
+			end := findTagEnd(data, i+1)
+			if end < 0 {
+				out.Write(data[i:])
+				return out.Bytes()
+			}
+			out.Write(data[i : end+1])
+			i = end + 1
+			continue
+		}
+		// Closing tag: copy it as is.
+		if i+1 < len(data) && data[i+1] == '/' {
+			end := findTagEnd(data, i+1)
+			if end < 0 {
+				out.Write(data[i:])
+				return out.Bytes()
+			}
+			out.Write(data[i : end+1])
+			i = end + 1
+			continue
+		}
+		// Opening tag. Find its end first, respecting quoted attribute
+		// values, so a '>' inside title="a > b" does not truncate it.
+		j := i + 1
+		for j < len(data) && isTagNameByte(data[j]) {
+			j++
+		}
+		name := strings.ToLower(string(data[i+1 : j]))
+		end := findTagEnd(data, j)
+		if end < 0 {
+			out.Write(data[i:])
+			return out.Bytes()
+		}
+		tag := data[i : end+1]
+		selfClosing := len(tag) >= 2 && tag[len(tag)-2] == '/'
+
+		if !xhtmlSelfClosingTags[name] {
+			// Not one of the tags we care about. Copy the whole tag; this
+			// also avoids touching tag-like text inside attribute values.
+			out.Write(tag)
+			i = end + 1
+			continue
+		}
+		if selfClosing {
+			if name == "plaintext" {
+				// The HTML parser never closes <plaintext>; an empty
+				// self-closing element can simply be dropped.
+				i = end + 1
+				continue
+			}
+			// Keep attributes, drop the trailing "/", and add an explicit
+			// closing tag: <title id="x"/> -> <title id="x"></title>.
+			out.Write(tag[:len(tag)-2])
+			out.WriteByte('>')
+			out.WriteString("</")
+			out.WriteString(name)
+			out.WriteByte('>')
+			i = end + 1
+			continue
+		}
+
+		// Open tag. Copy it, then copy the content of raw-text elements
+		// unchanged until their closing tag.
+		out.Write(tag)
+		i = end + 1
+		if name == "plaintext" {
+			// Everything after <plaintext> is raw text for the HTML parser.
+			out.Write(data[i:])
+			return out.Bytes()
+		}
+		if !xhtmlRawTextTags[name] {
+			continue
+		}
+		closeTag := "</" + name
+		idx := indexClosingTag(data, i, closeTag)
+		if idx < 0 {
+			out.Write(data[i:])
+			return out.Bytes()
+		}
+		closeEnd := findTagEnd(data, idx+len(closeTag))
+		if closeEnd < 0 {
+			out.Write(data[i:])
+			return out.Bytes()
+		}
+		out.Write(data[i : closeEnd+1])
+		i = closeEnd + 1
+	}
+	return out.Bytes()
+}
+
+// indexClosingTag finds a closing tag while requiring a tag-name boundary
+// after it. This keeps a string like "</scripture>" inside a script from
+// being mistaken for "</script>".
+func indexClosingTag(data []byte, start int, closeTag string) int {
+	for start <= len(data) {
+		idx := indexFold(data[start:], closeTag)
+		if idx < 0 {
+			return -1
+		}
+		idx += start
+		after := idx + len(closeTag)
+		if after >= len(data) || isTagBoundary(data[after]) {
+			return idx
+		}
+		start = idx + 1
+	}
+	return -1
+}
+
+func isTagBoundary(c byte) bool {
+	return c == '>' || c == '/' || c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// findTagEnd returns the index of the '>' that ends the tag starting at
+// start, respecting quoted attribute values. It returns -1 if the tag is
+// unterminated.
+func findTagEnd(data []byte, start int) int {
+	inQuote := byte(0)
+	for i := start; i < len(data); i++ {
+		c := data[i]
+		if inQuote != 0 {
+			if c == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			inQuote = c
+		case '>':
+			return i
+		}
+	}
+	return -1
+}
+
+// indexFold is a case-insensitive bytes.Index for ASCII tag names.
+func indexFold(data []byte, needle string) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	for i := 0; i+len(needle) <= len(data); i++ {
+		match := true
+		for j := 0; j < len(needle); j++ {
+			a, b := data[i+j], needle[j]
+			if a >= 'A' && a <= 'Z' {
+				a += 'a' - 'A'
+			}
+			if b >= 'A' && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+func isTagNameByte(c byte) bool {
+	return c == ':' || c == '-' || c == '_' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
 // epubChapterHTML extracts the body of a spine document as sanitized
 // HTML. The chapter title is taken from the first heading.
-func epubChapterHTML(r io.Reader, baseDir string, imgURL func(string) string, imgDims func(string) (int, int)) (title, body string) {
-	doc, err := html.Parse(r)
+func epubChapterHTML(chapter []byte, baseDir string, imgURL func(string) string, imgDims func(string) (int, int)) (title, body string) {
+	doc, err := html.Parse(bytes.NewReader(normalizeXHTML(chapter)))
 	if err != nil {
 		return "", ""
 	}
