@@ -19,6 +19,7 @@ import (
 
 var (
 	ErrNoFile      = errors.New("book file not found")
+	ErrNoCover     = errors.New("cover not found")
 	ErrNotBareFile = errors.New("editing is only supported for a bare EPUB file")
 )
 
@@ -617,6 +618,54 @@ func (l *Library) Cover(bookID int64, folder, file, ext string) ([]byte, string,
 		return nil, "", err
 	}
 	return data, mime, nil
+}
+
+// CheckCover extracts a cover without touching the LRU cache. Maintenance
+// scans must not leave negative cache entries behind: a cover added later
+// should become visible without a restart. Unlike Cover, parse failures are
+// returned as errors instead of being folded into ErrNoFile, so the scan can
+// distinguish a missing cover from a damaged book.
+func (l *Library) CheckCover(folder, file, ext string) error {
+	if l == nil {
+		return ErrNoFile
+	}
+	if _, _, ok := l.sidecarCover(folder, file); ok {
+		return nil
+	}
+	switch {
+	case strings.EqualFold(ext, "fb2"):
+		rc, _, err := l.Open(folder, file, ext)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		meta, err := ParseFB2(rc, true)
+		if err != nil {
+			return fmt.Errorf("parse fb2: %w", err)
+		}
+		if len(meta.Cover) == 0 {
+			return ErrNoFile
+		}
+		return nil
+	case strings.EqualFold(ext, "epub"):
+		rc, _, err := l.Open(folder, file, ext)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		raw, err := readLimited(rc, maxArchiveEntrySize)
+		if err != nil {
+			return err
+		}
+		if _, _, err := EPUBCover(bytes.NewReader(raw), int64(len(raw))); err != nil {
+			if errors.Is(err, ErrNoCover) {
+				return ErrNoFile
+			}
+			return fmt.Errorf("read epub cover: %w", err)
+		}
+		return nil
+	}
+	return ErrNoFile
 }
 
 // sidecarCover looks for a cover in covers/<archive>.zip|7z (Flibusta layout).

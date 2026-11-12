@@ -286,7 +286,7 @@ func EPUBCover(r io.ReaderAt, size int64) ([]byte, string, error) {
 		}
 	}
 	if href == "" {
-		return nil, "", fmt.Errorf("epub: no cover")
+		return nil, "", ErrNoCover
 	}
 
 	coverPath := path.Join(path.Dir(opfPath), unescapePath(href))

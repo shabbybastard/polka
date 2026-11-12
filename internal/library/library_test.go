@@ -264,6 +264,32 @@ func TestOpenEPUBUnwrapsSevenZip(t *testing.T) {
 	}
 }
 
+func TestCheckCoverDistinguishesMissingAndBroken(t *testing.T) {
+	root := t.TempDir()
+	l := New(root)
+	noCover := `<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<description><title-info><book-title>Без обложки</book-title></title-info></description><body><section><p>Текст.</p></section></body></FictionBook>`
+	if err := os.WriteFile(filepath.Join(root, "no-cover.fb2"), []byte(noCover), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "broken.fb2"), []byte("<not-fb2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "no-cover.epub"), epubZip(t, false, false), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.CheckCover(".", "no-cover", "fb2"); !errors.Is(err, ErrNoFile) {
+		t.Errorf("missing fb2 cover error = %v, want ErrNoFile", err)
+	}
+	if err := l.CheckCover(".", "no-cover", "epub"); !errors.Is(err, ErrNoFile) {
+		t.Errorf("missing epub cover error = %v, want ErrNoFile", err)
+	}
+	err := l.CheckCover(".", "broken", "fb2")
+	if err == nil || errors.Is(err, ErrNoFile) {
+		t.Errorf("broken fb2 error = %v, want a parse error", err)
+	}
+}
+
 func TestCover(t *testing.T) {
 	root := t.TempDir()
 	l := New(root)

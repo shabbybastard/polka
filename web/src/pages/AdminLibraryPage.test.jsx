@@ -268,4 +268,70 @@ describe("AdminLibraryPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: t("admin.maintenance.scan") }));
     await waitFor(() => expect(startEPUBMaintenance).toHaveBeenCalledWith("scan", { deep: true }));
   });
+
+  it("starts metadata and cover maintenance scans", async () => {
+    mockBase();
+    startEPUBMaintenance.mockResolvedValue({ started: true });
+
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.maintenance") }));
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.maintenance.metadata") }));
+    await waitFor(() => expect(startEPUBMaintenance).toHaveBeenCalledWith("metadata", { deep: true }));
+
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.maintenance.covers") }));
+    await waitFor(() => expect(startEPUBMaintenance).toHaveBeenCalledWith("covers", { deep: true }));
+  });
+
+  it("keeps a dismissed completed maintenance card hidden", async () => {
+    mockBase();
+    const status = {
+      mode: "scan",
+      running: false,
+      startedAt: 111,
+      processed: 10,
+      total: 10,
+      needsFix: 0,
+      fixed: 0,
+      archived: 0,
+      unreadable: 0,
+      failed: 0,
+      examples: [],
+    };
+    epubMaintenanceStatus.mockResolvedValue(status);
+
+    const view = render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.maintenance") }));
+    expect(await screen.findByText(t("admin.maintenance.modeScan"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: t("admin.progress.close") }));
+    await waitFor(() => expect(screen.queryByText(t("admin.maintenance.modeScan"))).not.toBeInTheDocument());
+    view.unmount();
+
+    const view2 = render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.maintenance") }));
+    await waitFor(() => expect(epubMaintenanceStatus).toHaveBeenCalled());
+    expect(screen.queryByText(t("admin.maintenance.modeScan"))).not.toBeInTheDocument();
+    view2.unmount();
+
+    epubMaintenanceStatus.mockResolvedValue({ ...status, startedAt: 222 });
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: t("admin.tab.maintenance") }));
+    expect(await screen.findByText(t("admin.maintenance.modeScan"))).toBeInTheDocument();
+  });
 });

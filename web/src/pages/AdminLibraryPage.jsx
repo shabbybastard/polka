@@ -76,9 +76,13 @@ const SHOW_COLLECTION_SOURCES = false;
 const CONVERSION_DISMISSED_KEY = "polka-conversion-dismissed";
 const GENRE_STATUS_DISMISSED_KEY = "polka-genre-status-dismissed";
 const RATING_STATUS_DISMISSED_KEY = "polka-rating-status-dismissed";
+const MAINTENANCE_DISMISSED_KEY = "polka-maintenance-dismissed";
 
 const conversionSignature = (jobs) =>
   jobs?.length ? `${jobs[0].id}:${jobs[0].updatedAt ?? ""}` : "";
+
+const maintenanceSignature = (status) =>
+  status?.mode ? `${status.mode}:${status.startedAt ?? ""}:${status.total ?? 0}` : "";
 
 const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -342,7 +346,16 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
 
   const [maintenanceStatus, setMaintenanceStatus] = useState(null);
   const [maintenanceDeep, setMaintenanceDeep] = useState(true);
+  const [maintenanceDismissed, setMaintenanceDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(MAINTENANCE_DISMISSED_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const maintenancePolling = useRef(null);
+  const maintenanceSig = maintenanceSignature(maintenanceStatus);
+  const maintenanceHidden = Boolean(maintenanceSig) && maintenanceSig === maintenanceDismissed;
 
   const pollMaintenanceStatus = () => {
     epubMaintenanceStatus()
@@ -370,9 +383,29 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
     };
   }, []);
 
+  const showMaintenance = () => {
+    setMaintenanceDismissed("");
+    try {
+      localStorage.removeItem(MAINTENANCE_DISMISSED_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const dismissMaintenance = () => {
+    if (!maintenanceSig) return;
+    setMaintenanceDismissed(maintenanceSig);
+    try {
+      localStorage.setItem(MAINTENANCE_DISMISSED_KEY, maintenanceSig);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const startMaintenance = (mode) => {
     if (maintenanceStatus?.running) return;
     if (mode === "fix" && !confirm(t("admin.maintenance.confirmFix"))) return;
+    showMaintenance();
     startEPUBMaintenance(mode, { deep: maintenanceDeep })
       .then(() => pollMaintenanceStatus())
       .catch((err) =>
@@ -1506,9 +1539,30 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
           >
             {t("admin.maintenance.fix")}
           </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => startMaintenance("metadata")}
+            disabled={Boolean(maintenanceStatus?.running)}
+          >
+            {t("admin.maintenance.metadata")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => startMaintenance("covers")}
+            disabled={Boolean(maintenanceStatus?.running)}
+          >
+            {t("admin.maintenance.covers")}
+          </button>
           {maintenanceStatus?.running && (
             <button type="button" className="btn btn-ghost" onClick={stopMaintenance}>
               {t("admin.maintenance.stop")}
+            </button>
+          )}
+          {maintenanceHidden && maintenanceStatus?.mode && (
+            <button type="button" className="btn btn-link" onClick={showMaintenance}>
+              {t("admin.maintenance.showProgress")}
             </button>
           )}
         </div>
@@ -1521,13 +1575,17 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
           />
           <span className="library-admin__source-name">{t("admin.maintenance.deep")}</span>
         </label>
-        {maintenanceStatus && maintenanceStatus.mode && (
+        {maintenanceStatus && maintenanceStatus.mode && !maintenanceHidden && (
           <div className="library-admin__genre-status">
             <div className="library-admin__genre-status-head">
               <span className="library-admin__genre-mode">
                 {maintenanceStatus.mode === "fix"
                   ? t("admin.maintenance.modeFix")
-                  : t("admin.maintenance.modeScan")}
+                  : maintenanceStatus.mode === "metadata"
+                    ? t("admin.maintenance.modeMetadata")
+                    : maintenanceStatus.mode === "covers"
+                      ? t("admin.maintenance.modeCovers")
+                      : t("admin.maintenance.modeScan")}
               </span>
               <span className="library-admin__genre-progress">
                 {t("admin.maintenance.progress", {
@@ -1535,6 +1593,15 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                   total: Number(maintenanceStatus.total).toLocaleString(),
                 })}
               </span>
+              <button
+                type="button"
+                className="library-admin__status-dismiss"
+                onClick={dismissMaintenance}
+                aria-label={t("admin.progress.close")}
+                title={t("admin.progress.close")}
+              >
+                ×
+              </button>
             </div>
             <div
               className="library-admin__genre-bar"
@@ -1549,10 +1616,21 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
               />
             </div>
             <div className="library-admin__maintenance-counts">
-              <span>{t("admin.maintenance.needsFix", { n: Number(maintenanceStatus.needsFix).toLocaleString() })}</span>
-              <span>{t("admin.maintenance.fixed", { n: Number(maintenanceStatus.fixed).toLocaleString() })}</span>
-              <span>{t("admin.maintenance.archived", { n: Number(maintenanceStatus.archived).toLocaleString() })}</span>
-              <span>{t("admin.maintenance.unreadable", { n: Number(maintenanceStatus.unreadable).toLocaleString() })}</span>
+              {maintenanceStatus.mode === "metadata" ? (
+                <span>{t("admin.maintenance.issues", { n: Number(maintenanceStatus.issues).toLocaleString() })}</span>
+              ) : maintenanceStatus.mode === "covers" ? (
+                <>
+                  <span>{t("admin.maintenance.missingCovers", { n: Number(maintenanceStatus.missingCovers).toLocaleString() })}</span>
+                  <span>{t("admin.maintenance.coverErrors", { n: Number(maintenanceStatus.coverErrors).toLocaleString() })}</span>
+                </>
+              ) : (
+                <>
+                  <span>{t("admin.maintenance.needsFix", { n: Number(maintenanceStatus.needsFix).toLocaleString() })}</span>
+                  <span>{t("admin.maintenance.fixed", { n: Number(maintenanceStatus.fixed).toLocaleString() })}</span>
+                  <span>{t("admin.maintenance.archived", { n: Number(maintenanceStatus.archived).toLocaleString() })}</span>
+                  <span>{t("admin.maintenance.unreadable", { n: Number(maintenanceStatus.unreadable).toLocaleString() })}</span>
+                </>
+              )}
               <span>{t("admin.maintenance.failed", { n: Number(maintenanceStatus.failed).toLocaleString() })}</span>
             </div>
             {maintenanceStatus.stopped && (
@@ -1571,7 +1649,7 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                 </ul>
               </div>
             )}
-            {!maintenanceStatus.running && (
+            {!maintenanceStatus.running && !maintenanceStatus.error && (
               <div className="library-admin__status-close">
                 {maintenanceStatus.mode === "fix"
                   ? maintenanceStatus.fixed > 0
@@ -1579,11 +1657,21 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
                     : maintenanceStatus.failed > 0
                       ? ""
                       : t("admin.maintenance.noProblems")
-                  : maintenanceStatus.needsFix > 0 ||
-                      maintenanceStatus.unreadable > 0 ||
-                      maintenanceStatus.failed > 0
-                    ? ""
-                    : t("admin.maintenance.noProblems")}
+                  : maintenanceStatus.mode === "metadata"
+                    ? Number(maintenanceStatus.issues) > 0 || Number(maintenanceStatus.failed) > 0
+                      ? ""
+                      : t("admin.maintenance.noProblems")
+                    : maintenanceStatus.mode === "covers"
+                      ? Number(maintenanceStatus.missingCovers) > 0 ||
+                        Number(maintenanceStatus.coverErrors) > 0 ||
+                        Number(maintenanceStatus.failed) > 0
+                        ? ""
+                        : t("admin.maintenance.noProblems")
+                      : maintenanceStatus.needsFix > 0 ||
+                          maintenanceStatus.unreadable > 0 ||
+                          maintenanceStatus.failed > 0
+                        ? ""
+                        : t("admin.maintenance.noProblems")}
               </div>
             )}
           </div>

@@ -325,6 +325,20 @@
   font-weight: 600;
 }
 
+.library-admin__status-dismiss {
+  border: 0;
+  background: none;
+  color: var(--fg-muted, #777);
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.library-admin__status-dismiss:hover {
+  color: var(--fg);
+}
+
 .library-admin__genre-progress {
   display: inline-flex;
   align-items: center;

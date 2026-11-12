@@ -478,6 +478,60 @@ func (s *Store) EPUBCount(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// BooksForMaintenance walks all visible books in id order. It is used by
+// maintenance checks that are not limited to EPUB files.
+func (s *Store) BooksForMaintenance(ctx context.Context, afterID int64, limit int) ([]BookFile, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size
+		FROM books b JOIN folders fo ON fo.id = b.folder_id
+		WHERE b.deleted = 0 AND b.id > ?
+		ORDER BY b.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BookFile
+	for rows.Next() {
+		var f BookFile
+		if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// BooksForMetadataCheck walks visible books with the catalog fields needed by
+// the metadata maintenance scan.
+func (s *Store) BooksForMetadataCheck(ctx context.Context, afterID int64, limit int) ([]BookMetadataCheck, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT b.id, b.title, coalesce(b.year, 0), coalesce(b.lang, ''), coalesce(b.isbn, ''),
+		       coalesce((
+		           SELECT group_concat(trim(coalesce(a.last_name, '') || ' ' ||
+		                                   coalesce(a.first_name, '') || ' ' ||
+		                                   coalesce(a.middle_name, '')), ', ')
+		           FROM book_authors ba JOIN authors a ON a.id = ba.author_id
+		           WHERE ba.book_id = b.id
+		       ), ''),
+		       (SELECT count(*) FROM book_genres bg WHERE bg.book_id = b.id)
+		FROM books b
+		WHERE b.deleted = 0 AND b.id > ?
+		ORDER BY b.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BookMetadataCheck
+	for rows.Next() {
+		var b BookMetadataCheck
+		if err := rows.Scan(&b.ID, &b.Title, &b.Year, &b.Lang, &b.ISBN, &b.Authors, &b.Genres); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // BooksWithoutGenresCount is the total for the "only empty" bulk job.
 func (s *Store) BooksWithoutGenresCount(ctx context.Context) (int, error) {
 	var n int

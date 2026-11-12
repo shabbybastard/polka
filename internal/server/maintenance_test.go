@@ -81,6 +81,75 @@ func TestEPUBMaintenanceDeepScanUnreadable(t *testing.T) {
 	}
 }
 
+func TestMaintenanceLanguageValidation(t *testing.T) {
+	for _, lang := range []string{"ru", "en-US", "zh-Hans", "sr-Latn-RS"} {
+		if !validLanguage(lang) {
+			t.Errorf("validLanguage(%q) = false", lang)
+		}
+	}
+	for _, lang := range []string{"", "?", "r", "ru-", "ru--RU", "ru-1", "ru-abcdefghi"} {
+		if validLanguage(lang) {
+			t.Errorf("validLanguage(%q) = true", lang)
+		}
+	}
+}
+
+func TestMaintenanceMetadataAndCovers(t *testing.T) {
+	f := newFullServer(t, "required")
+	ctx := context.Background()
+
+	// A deliberately broken catalog record: empty title, no authors or
+	// genres, impossible year/language and a malformed ISBN.
+	if _, err := f.st.AddBook(ctx, &store.BookInput{
+		Title: "", Folder: ".", File: "bad-meta", Ext: "fb2", Size: 1,
+		Added: "2026-11-12", Year: 9999, Lang: "??", ISBN: "123",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A bare EPUB without an embedded cover for the cover scan.
+	epub := maintenanceEPUB(t)
+	if err := os.WriteFile(filepath.Join(f.dir, "lib", "no-cover.epub"), epub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddBook(ctx, &store.BookInput{
+		Title: "No cover", Authors: []store.AuthorName{{Last: "Тестов"}},
+		Genres: []string{"sf"}, Folder: ".", File: "no-cover", Ext: "epub",
+		Size: int64(len(epub)), Added: "2026-11-12", Lang: "ru",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, f.admin, f.ts.URL+"/admin/maintenance/epub?mode=metadata", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metadata scan start -> %d", resp.StatusCode)
+	}
+	status := waitMaintenance(t, f)
+	if status["mode"] != "metadata" || status["issues"].(float64) < 1 {
+		t.Fatalf("metadata status = %+v", status)
+	}
+	if status["startedAt"].(float64) <= 0 {
+		t.Errorf("metadata startedAt missing: %+v", status)
+	}
+	if examples := status["examples"].([]any); len(examples) == 0 {
+		t.Errorf("metadata examples missing: %+v", status)
+	}
+
+	resp = postJSON(t, f.admin, f.ts.URL+"/admin/maintenance/epub?mode=covers", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cover scan start -> %d", resp.StatusCode)
+	}
+	status = waitMaintenance(t, f)
+	if status["mode"] != "covers" || status["missingCovers"].(float64) < 1 {
+		t.Fatalf("cover status = %+v", status)
+	}
+	if status["processed"].(float64) != status["total"].(float64) {
+		t.Errorf("cover scan processed=%v total=%v", status["processed"], status["total"])
+	}
+}
+
 func TestEPUBMaintenance(t *testing.T) {
 	f := newFullServer(t, "required")
 	ctx := context.Background()

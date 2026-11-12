@@ -32,6 +32,18 @@ type BookFile struct {
 	Size   int64
 }
 
+// BookMetadataCheck is the catalog metadata inspected by the maintenance
+// scan. It deliberately avoids reading the book file itself.
+type BookMetadataCheck struct {
+	ID      int64
+	Title   string
+	Authors string
+	Year    int
+	Lang    string
+	ISBN    string
+	Genres  int
+}
+
 // BookDetails is the full book card.
 type BookDetails struct {
 	Book
