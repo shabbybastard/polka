@@ -31,7 +31,16 @@ func TestWishlistAdoptsExistingListName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lists) != 1 || lists[0].ID != wl.ID {
-		t.Errorf("lists = %+v, want only the adopted wishlist", lists)
+	if len(lists) != 2 {
+		t.Errorf("lists = %+v, want wishlist and read list", lists)
+	}
+	found := false
+	for _, l := range lists {
+		if l.ID == wl.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("adopted wishlist missing: %+v", lists)
 	}
 }

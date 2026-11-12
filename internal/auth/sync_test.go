@@ -48,14 +48,19 @@ func TestSyncStateMergeLWW(t *testing.T) {
 		t.Errorf("rating = %d, want 4 (local newer)", r)
 	}
 
-	// Lists: builtin was found, the custom one created, books added
+	// Lists: builtin was found, the custom one created, books added. The
+	// automatic Read list also exists but is empty (no finished progress).
 	lists, _ := s.Lists(ctx, u.ID)
-	if len(lists) != 2 {
-		t.Fatalf("lists = %d, want 2", len(lists))
+	if len(lists) != 3 {
+		t.Fatalf("lists = %d, want 3", len(lists))
 	}
 	for _, l := range lists {
-		if l.Books != 1 {
-			t.Errorf("list %q books = %d, want 1", l.Name, l.Books)
+		want := 0
+		if l.Builtin == BuiltinWishlist || l.Builtin == "" {
+			want = 1
+		}
+		if l.Books != want {
+			t.Errorf("list %q books = %d, want %d", l.Name, l.Books, want)
 		}
 	}
 
@@ -65,8 +70,12 @@ func TestSyncStateMergeLWW(t *testing.T) {
 	}
 	lists, _ = s.Lists(ctx, u.ID)
 	for _, l := range lists {
-		if l.Books != 1 {
-			t.Errorf("after re-merge list %q books = %d", l.Name, l.Books)
+		want := 0
+		if l.Builtin == BuiltinWishlist || l.Builtin == "" {
+			want = 1
+		}
+		if l.Books != want {
+			t.Errorf("after re-merge list %q books = %d, want %d", l.Name, l.Books, want)
 		}
 	}
 
@@ -75,7 +84,7 @@ func TestSyncStateMergeLWW(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Progress) != 2 || len(state.Ratings) != 1 || len(state.Lists) != 2 {
+	if len(state.Progress) != 2 || len(state.Ratings) != 1 || len(state.Lists) != 3 {
 		t.Errorf("export: %d/%d/%d", len(state.Progress), len(state.Ratings), len(state.Lists))
 	}
 	if state.Progress[0].UpdatedAt == "" {
@@ -199,9 +208,9 @@ func TestSyncStateMergeTimestampFormats(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT count(*) FROM lists WHERE user_id = ?`, u.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	// One wishlist is created lazily on demand; only the named list must appear.
-	if count != 1 {
-		t.Errorf("lists = %d, want 1", count)
+	// The named list plus the automatic Read list created by the merge.
+	if count != 2 {
+		t.Errorf("lists = %d, want 2", count)
 	}
 
 	// Garbage timestamps are dropped, not merged into the tables.

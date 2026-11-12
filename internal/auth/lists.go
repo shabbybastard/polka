@@ -43,8 +43,11 @@ func migrateListTombstones(db *sql.DB) error {
 	return addColumnIfMissing(db, "list_books", "deleted", `deleted INTEGER NOT NULL DEFAULT 0`)
 }
 
-// BuiltinWishlist is the built-in "Want to read" list.
-const BuiltinWishlist = "wishlist"
+// Built-in lists: "Want to read" and the automatic "Read" list.
+const (
+	BuiltinWishlist = "wishlist"
+	BuiltinRead     = "read"
+)
 
 var (
 	ErrListNotFound  = errors.New("list not found")
@@ -62,6 +65,15 @@ type List struct {
 }
 
 func (s *Service) Lists(ctx context.Context, userID int64) ([]List, error) {
+	// The read list is a default list and must be visible even before the
+	// first finished book. Reconcile it with existing progress so users who
+	// finished books before this feature get their Read list filled in.
+	if _, err := s.ReadList(ctx, userID); err != nil {
+		return nil, err
+	}
+	if err := s.syncReadListAll(ctx, userID); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT l.id, l.name, l.builtin, l.deleted, l.updated_at,
 		       (SELECT count(*) FROM list_books lb WHERE lb.list_id = l.id AND lb.deleted = 0)
@@ -118,12 +130,24 @@ func (s *Service) CreateList(ctx context.Context, userID int64, name string) (*L
 	return &List{ID: id, Name: name}, nil
 }
 
-// Wishlist returns the user's built-in list, creating it if needed.
+// Wishlist returns the user's built-in "Want to read" list, creating it if
+// needed.
 func (s *Service) Wishlist(ctx context.Context, userID int64) (*List, error) {
+	return s.builtinList(ctx, userID, BuiltinWishlist, "Хочу прочитать")
+}
+
+// ReadList returns the user's built-in "Read" list, creating it if needed.
+// Membership is maintained from reading progress and can also be changed
+// manually through the list API.
+func (s *Service) ReadList(ctx context.Context, userID int64) (*List, error) {
+	return s.builtinList(ctx, userID, BuiltinRead, "Прочитано")
+}
+
+func (s *Service) builtinList(ctx context.Context, userID int64, builtin, name string) (*List, error) {
 	var l List
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, name, builtin FROM lists WHERE user_id = ? AND builtin = ? AND deleted = 0`,
-		userID, BuiltinWishlist).Scan(&l.ID, &l.Name, &l.Builtin)
+		userID, builtin).Scan(&l.ID, &l.Name, &l.Builtin)
 	if err == nil {
 		return &l, nil
 	}
@@ -133,36 +157,36 @@ func (s *Service) Wishlist(ctx context.Context, userID int64) (*List, error) {
 	// Revive a deleted tombstone for the builtin list if one exists.
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT id, name FROM lists WHERE user_id = ? AND builtin = ? AND deleted = 1`,
-		userID, BuiltinWishlist).Scan(&l.ID, &l.Name); err == nil {
+		userID, builtin).Scan(&l.ID, &l.Name); err == nil {
 		if _, uerr := s.db.ExecContext(ctx,
 			`UPDATE lists SET deleted = 0, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`, l.ID); uerr != nil {
 			return nil, uerr
 		}
-		l.Builtin = BuiltinWishlist
+		l.Builtin = builtin
 		return &l, nil
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO lists (user_id, name, builtin) VALUES (?, ?, ?)`,
-		userID, "Хочу прочитать", BuiltinWishlist)
+		userID, name, builtin)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			// An ordinary list with the builtin name already exists. Adopt it
-			// instead of failing every wishlist sync forever.
+			// instead of failing every sync forever.
 			var id int64
 			if qerr := s.db.QueryRowContext(ctx,
-				`SELECT id FROM lists WHERE user_id = ? AND name = ?`, userID, "Хочу прочитать").Scan(&id); qerr == nil {
+				`SELECT id FROM lists WHERE user_id = ? AND name = ?`, userID, name).Scan(&id); qerr == nil {
 				if _, uerr := s.db.ExecContext(ctx,
 					`UPDATE lists SET builtin = ?, deleted = 0, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?`,
-					BuiltinWishlist, id); uerr != nil {
+					builtin, id); uerr != nil {
 					return nil, uerr
 				}
-				return &List{ID: id, Name: "Хочу прочитать", Builtin: BuiltinWishlist}, nil
+				return &List{ID: id, Name: name, Builtin: builtin}, nil
 			}
 		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
-	return &List{ID: id, Name: "Хочу прочитать", Builtin: BuiltinWishlist}, nil
+	return &List{ID: id, Name: name, Builtin: builtin}, nil
 }
 
 // userList checks that the list belongs to the user.
@@ -224,10 +248,14 @@ func (s *Service) DeleteList(ctx context.Context, userID, listID int64) error {
 }
 
 func (s *Service) AddToList(ctx context.Context, userID, listID, bookID int64) error {
-	if _, err := s.userList(ctx, userID, listID); err != nil {
+	l, err := s.userList(ctx, userID, listID)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	if l.Builtin == BuiltinRead {
+		return s.markBookRead(ctx, userID, bookID, listID)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO list_books (list_id, book_id, deleted, added_at)
 		VALUES (?, ?, 0, strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		ON CONFLICT (list_id, book_id) DO UPDATE
@@ -236,10 +264,14 @@ func (s *Service) AddToList(ctx context.Context, userID, listID, bookID int64) e
 }
 
 func (s *Service) RemoveFromList(ctx context.Context, userID, listID, bookID int64) error {
-	if _, err := s.userList(ctx, userID, listID); err != nil {
+	l, err := s.userList(ctx, userID, listID)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	if l.Builtin == BuiltinRead {
+		return s.markBookUnread(ctx, userID, bookID, listID)
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO list_books (list_id, book_id, deleted, added_at)
 		VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%f', 'now'))
 		ON CONFLICT (list_id, book_id) DO UPDATE
@@ -260,6 +292,31 @@ func (s *Service) ListBookIDs(ctx context.Context, userID, listID int64, limit, 
 	}
 	defer rows.Close()
 
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ReadBookIDs returns the books in the built-in "Read" list, recently added
+// first. It never creates the list: a user without one simply has no read
+// books.
+func (s *Service) ReadBookIDs(ctx context.Context, userID int64, limit int) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT lb.book_id FROM list_books lb
+		JOIN lists l ON l.id = lb.list_id
+		WHERE l.user_id = ? AND l.builtin = ? AND l.deleted = 0 AND lb.deleted = 0
+		ORDER BY lb.added_at DESC, lb.book_id DESC LIMIT ?`,
+		userID, BuiltinRead, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	var ids []int64
 	for rows.Next() {
 		var id int64

@@ -17,7 +17,7 @@ import (
 func (s *Server) userSeeds(r *http.Request, userID int64) (seeds, exclude []int64) {
 	ctx := r.Context()
 	liked, _ := s.users.RatedBookIDs(ctx, userID, 4)
-	listed, _ := s.users.AllListBookIDs(ctx, userID)
+	read, _ := s.users.ReadBookIDs(ctx, userID, 60)
 	var reading []int64
 	if progress, err := s.users.ListProgress(ctx, userID, 100); err == nil {
 		for _, p := range progress {
@@ -25,6 +25,8 @@ func (s *Server) userSeeds(r *http.Request, userID int64) (seeds, exclude []int6
 		}
 	}
 	rated, _ := s.users.RatedBookIDs(ctx, userID, 0)
+	listed, _ := s.users.AllListBookIDs(ctx, userID)
+	progressed, _ := s.users.ProgressBookIDs(ctx, userID)
 
 	seen := map[int64]bool{}
 	add := func(dst *[]int64, ids []int64, cap int) {
@@ -38,22 +40,20 @@ func (s *Server) userSeeds(r *http.Request, userID int64) (seeds, exclude []int6
 			}
 		}
 	}
-	// Limit seeds to the 60 most recent: SQL with IN lists must stay lightweight.
-	add(&seeds, liked, 60)
-	add(&seeds, listed, 60)
+	// Reading now and finished books are the primary signals. High ratings
+	// are a secondary signal; they must not crowd out actual reading.
 	add(&seeds, reading, 60)
+	add(&seeds, read, 60)
+	add(&seeds, liked, 60)
 
 	excludeSeen := map[int64]bool{}
-	for _, ids := range [][]int64{rated, listed, reading} {
+	for _, ids := range [][]int64{rated, listed, progressed} {
 		for _, id := range ids {
 			if !excludeSeen[id] {
 				excludeSeen[id] = true
 				exclude = append(exclude, id)
 			}
 		}
-	}
-	if len(exclude) > 400 {
-		exclude = exclude[:400]
 	}
 	return seeds, exclude
 }

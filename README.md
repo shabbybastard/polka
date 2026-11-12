@@ -32,6 +32,10 @@ mobile reading app.
   Open Library / Google Books.
 - **Reading lists & ratings.** Build custom lists, mark books you want to read,
   rate books 1–5 — average ratings are visible to everyone on your server.
+  A built-in **Read** list is filled automatically when progress reaches 98%;
+  adding a book to it manually marks the book read, removing it resets the
+  progress. “For you” recommendations use current reading, the Read list and
+  4+ ratings.
   External ratings (LiveLib, FantLab, Google Books, Open Library) can be
   enabled per source by the admin. External genres (LiveLib genres and Open Library
   subjects) can be merged into the catalog; both sources are off by default

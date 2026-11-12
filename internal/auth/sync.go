@@ -307,5 +307,8 @@ func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) e
 			}
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.syncReadListAll(ctx, userID)
 }

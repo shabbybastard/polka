@@ -32,10 +32,11 @@ const ListsMenu = ({ bookId, memberIds, onChange }) => {
 
   const toggle = (list) => {
     if (busy) return;
-    setBusy(true);
     const inList = member.has(list.id);
+    if (inList && list.builtin === "read" && !confirm(t("lists.readRemoveConfirm"))) return;
+    setBusy(true);
     (inList ? removeFromList(list.id, bookId) : addToList(list.id, bookId))
-      .then(() => onChange(list.id, !inList))
+      .then(() => onChange(list.id, !inList, list))
       .catch(() => {})
       .finally(() => setBusy(false));
   };
@@ -50,7 +51,7 @@ const ListsMenu = ({ bookId, memberIds, onChange }) => {
         addToList(res.list.id, bookId).then(() => {
           setLists((prev) => [...(prev ?? []), { ...res.list, books: 1 }]);
           setNewName("");
-          onChange(res.list.id, true);
+          onChange(res.list.id, true, res.list);
         })
       )
       .catch((err) => alert(err.status === 409 ? t("lists.nameTaken") : t("lists.createFail")))

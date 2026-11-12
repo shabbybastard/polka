@@ -136,8 +136,20 @@ const BookPage = ({ user, sync }) => {
 
   const inWishlist = wishlistId !== null && listIds.includes(wishlistId);
 
-  const onListChange = (listId, added) => {
+  const onListChange = (listId, added, list) => {
     setListIds((prev) => (added ? [...prev, listId] : prev.filter((id) => id !== listId)));
+    if (list?.builtin === "read") {
+      fetchProgress(bookId)
+        .then((p) => {
+          if (p?.stored) {
+            setReadProgress(Number(p.progress ?? 0));
+            return;
+          }
+          const local = localProgress.get(bookId);
+          setReadProgress(local ? Number(local.overall ?? 0) : 0);
+        })
+        .catch(() => {});
+    }
   };
 
   const flipWishlist = () => {

@@ -105,7 +105,10 @@ func (s *Service) SaveOverall(ctx context.Context, userID, bookID int64, overall
 		ON CONFLICT (user_id, book_id) DO UPDATE
 		SET overall = excluded.overall, deleted = 0, updated_at = excluded.updated_at`,
 		userID, bookID, overall)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.syncReadListBook(ctx, userID, bookID)
 }
 
 // DeleteKosyncByDocuments removes device positions for the given digests

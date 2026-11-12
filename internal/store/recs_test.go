@@ -86,6 +86,22 @@ func TestSeriesContinuations(t *testing.T) {
 	}
 }
 
+func TestRecommendForUserLargeExclude(t *testing.T) {
+	st, ids := newRecsStore(t)
+	ctx := context.Background()
+	seeds := []int64{ids["Цикл-1"]}
+	exclude := make([]int64, 5000)
+	for i := range exclude {
+		exclude[i] = 1_000_000 + int64(i)
+	}
+	if _, err := st.RecommendForUser(ctx, seeds, exclude, 10); err != nil {
+		t.Fatalf("large exclude: %v", err)
+	}
+	if _, err := st.SeriesContinuations(ctx, seeds, exclude, 10); err != nil {
+		t.Fatalf("large series exclude: %v", err)
+	}
+}
+
 func TestRecommendForUser(t *testing.T) {
 	st, ids := newRecsStore(t)
 	ctx := context.Background()

@@ -112,6 +112,7 @@ const ListsPage = () => {
   };
 
   const removeBook = (bookId) => {
+    if (active?.builtin === "read" && !confirm(t("lists.readRemoveConfirm"))) return;
     removeFromList(activeId, bookId).then(() => {
       setBooks((prev) => prev.filter((b) => b.BookID !== bookId));
       reloadLists();
@@ -166,6 +167,10 @@ const ListsPage = () => {
                 </>
               )}
             </div>
+          )}
+
+          {active?.builtin === "read" && (
+            <div className="lists-page__hint">{t("lists.readAuto")}</div>
           )}
 
           {loading && <div className="lists-page__hint">{t("loading")}</div>}

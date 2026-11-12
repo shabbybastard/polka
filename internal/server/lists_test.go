@@ -6,6 +6,74 @@ import (
 	"testing"
 )
 
+func TestReadListManualToggle(t *testing.T) {
+	ts, client, _ := newManageServer(t)
+
+	resp := uploadFiles(t, client, ts.URL+"/admin/books/upload", map[string][]byte{
+		"a.fb2": []byte(opdsFB2),
+	}, nil)
+	var up map[string][]uploadResult
+	json.NewDecoder(resp.Body).Decode(&up)
+	resp.Body.Close()
+	bookID := up["results"][0].BookID
+
+	var lists map[string][]map[string]any
+	resp, _ = client.Get(ts.URL + "/api/v1/lists")
+	json.NewDecoder(resp.Body).Decode(&lists)
+	resp.Body.Close()
+	var readListID int64
+	for _, l := range lists["lists"] {
+		if l["builtin"] == "read" {
+			readListID = int64(l["id"].(float64))
+		}
+	}
+	if readListID == 0 {
+		t.Fatal("read list was not created")
+	}
+
+	resp = postJSON(t, client, ts.URL+"/api/v1/lists/"+itoa64(readListID)+"/books", map[string]any{"bookId": bookID})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("manual read add -> %d", resp.StatusCode)
+	}
+	var progress map[string]any
+	resp, _ = client.Get(ts.URL + "/api/v1/read/" + itoa64(bookID) + "/progress")
+	json.NewDecoder(resp.Body).Decode(&progress)
+	resp.Body.Close()
+	if progress["progress"] != float64(1) {
+		t.Fatalf("manual read progress = %v", progress)
+	}
+
+	resp = postJSON(t, client, ts.URL+"/api/v1/lists/"+itoa64(readListID)+"/books/remove", map[string]any{"bookId": bookID})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("manual read remove -> %d", resp.StatusCode)
+	}
+	resp, _ = client.Get(ts.URL + "/api/v1/read/" + itoa64(bookID) + "/progress")
+	json.NewDecoder(resp.Body).Decode(&progress)
+	resp.Body.Close()
+	if progress["progress"] != float64(0) {
+		t.Fatalf("manual unread progress = %v", progress)
+	}
+
+	var shelves map[string][]map[string]any
+	resp, _ = client.Get(ts.URL + "/main/getBooks/getHomeShelves")
+	json.NewDecoder(resp.Body).Decode(&shelves)
+	resp.Body.Close()
+	found := false
+	for _, sh := range shelves["shelves"] {
+		if sh["id"] == "reading" {
+			found = true
+			if n := len(sh["books"].([]any)); n != 1 {
+				t.Errorf("reading shelf books = %d", n)
+			}
+		}
+	}
+	if !found {
+		t.Error("unread book did not return to the reading shelf")
+	}
+}
+
 func TestReadingLists(t *testing.T) {
 	ts, client, _ := newManageServer(t)
 
@@ -86,15 +154,15 @@ func TestReadingLists(t *testing.T) {
 	resp, _ = client.Get(ts.URL + "/api/v1/lists")
 	json.NewDecoder(resp.Body).Decode(&lists)
 	resp.Body.Close()
-	if len(lists["lists"]) != 2 {
+	if len(lists["lists"]) != 3 {
 		t.Fatalf("lists count = %d", len(lists["lists"]))
 	}
 	for _, l := range lists["lists"] {
 		id := int64(l["id"].(float64))
 		resp = postJSON(t, client, ts.URL+"/api/v1/lists/"+itoa64(id)+"/delete", nil)
 		resp.Body.Close()
-		if l["builtin"] == "wishlist" && resp.StatusCode != http.StatusConflict {
-			t.Errorf("delete builtin -> %d", resp.StatusCode)
+		if l["builtin"] != "" && resp.StatusCode != http.StatusConflict {
+			t.Errorf("delete builtin %v -> %d", l["builtin"], resp.StatusCode)
 		}
 		if l["builtin"] == "" && resp.StatusCode != 200 {
 			t.Errorf("delete custom -> %d", resp.StatusCode)

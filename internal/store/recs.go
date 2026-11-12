@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -74,6 +75,13 @@ func (s *Store) SeriesContinuations(ctx context.Context, seedIDs, excludeIDs []i
 	if len(seedIDs) == 0 {
 		return nil, nil
 	}
+	excludeJSON, err := json.Marshal(excludeIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(excludeIDs) == 0 {
+		excludeJSON = []byte("[]")
+	}
 	q := fmt.Sprintf(`
 		WITH seeds AS (
 			SELECT series_id, max(series_num) AS last_num
@@ -86,13 +94,13 @@ func (s *Store) SeriesContinuations(ctx context.Context, seedIDs, excludeIDs []i
 				SELECT min(b2.series_num) FROM books b2
 				WHERE b2.series_id = seeds.series_id AND b2.deleted = 0
 					AND b2.series_num > seeds.last_num
-					%s
+					AND b2.id NOT IN (SELECT value FROM json_each(?))
 			)
 		LIMIT %d`,
-		placeholders(len(seedIDs)), notInClause("b2.id", len(excludeIDs), len(seedIDs)+1), limit)
+		placeholders(len(seedIDs)), limit)
 
 	args := idsToArgs(seedIDs)
-	args = append(args, idsToArgs(excludeIDs)...)
+	args = append(args, string(excludeJSON))
 	ids, err := s.queryIDs(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -106,7 +114,16 @@ func (s *Store) RecommendForUser(ctx context.Context, seedIDs, excludeIDs []int6
 	if len(seedIDs) == 0 {
 		return nil, nil
 	}
+	excludeJSON, err := json.Marshal(excludeIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(excludeIDs) == 0 {
+		excludeJSON = []byte("[]")
+	}
 	half := limit/2 + 1
+	args := idsToArgs(seedIDs)
+	args = append(args, string(excludeJSON))
 
 	// Books by favorite authors (best by rating)
 	qAuthors := fmt.Sprintf(`
@@ -116,13 +133,9 @@ func (s *Store) RecommendForUser(ctx context.Context, seedIDs, excludeIDs []int6
 		SELECT DISTINCT b.id FROM book_authors ba
 		JOIN seed_authors USING (author_id)
 		JOIN books b ON b.id = ba.book_id AND b.deleted = 0
-		WHERE b.id NOT IN (%s) %s
+		WHERE b.id NOT IN (SELECT value FROM json_each(?))
 		ORDER BY b.lib_rate DESC, b.id DESC LIMIT %d`,
-		placeholders(len(seedIDs)), placeholders2(len(seedIDs), len(seedIDs)),
-		notInClause("b.id", len(excludeIDs), 2*len(seedIDs)+1), half)
-	args := idsToArgs(seedIDs)
-	args = append(args, idsToArgs(seedIDs)...)
-	args = append(args, idsToArgs(excludeIDs)...)
+		placeholders(len(seedIDs)), half)
 	byAuthor, err := s.queryIDs(ctx, qAuthors, args...)
 	if err != nil {
 		return nil, err
@@ -137,10 +150,9 @@ func (s *Store) RecommendForUser(ctx context.Context, seedIDs, excludeIDs []int6
 		SELECT b.id FROM books b
 		WHERE b.lib_rate >= 4 AND b.deleted = 0
 			AND b.id IN (SELECT book_id FROM book_genres JOIN fav_genres USING (genre_id))
-			AND b.id NOT IN (%s) %s
+			AND b.id NOT IN (SELECT value FROM json_each(?))
 		ORDER BY b.lib_rate DESC, b.id DESC LIMIT %d`,
-		placeholders(len(seedIDs)), placeholders2(len(seedIDs), len(seedIDs)),
-		notInClause("b.id", len(excludeIDs), 2*len(seedIDs)+1), half)
+		placeholders(len(seedIDs)), half)
 	byGenre, err := s.queryIDs(ctx, qGenres, args...)
 	if err != nil {
 		return nil, err
@@ -255,16 +267,6 @@ func placeholders(n int) string {
 		return "NULL"
 	}
 	return strings.Repeat("?,", n-1) + "?"
-}
-
-// placeholders2 is the same, but for the second occurrence of the same set.
-func placeholders2(n, _ int) string { return placeholders(n) }
-
-func notInClause(col string, n, _ int) string {
-	if n == 0 {
-		return ""
-	}
-	return fmt.Sprintf("AND %s NOT IN (%s)", col, placeholders(n))
 }
 
 func idsToArgs(ids []int64) []any {

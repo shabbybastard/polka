@@ -160,6 +160,8 @@ const ru = {
   "lists.renameFail": "Не удалось переименовать",
   "lists.deleteFail": "Не удалось удалить список",
   "lists.loadFail": "Не удалось загрузить список",
+  "lists.readAuto": "Список «Прочитано» заполняется автоматически по прогрессу чтения (98%). Добавить книгу можно из меню «В список» на её карточке.",
+  "lists.readRemoveConfirm": "Убрать книгу из «Прочитано»? Прогресс чтения будет сброшен.",
   // Login
   "login.subtitle": "Войдите, чтобы открыть библиотеку",
   "login.login": "Логин",
@@ -633,6 +635,8 @@ const en = {
   "lists.renameFail": "Failed to rename",
   "lists.deleteFail": "Failed to delete the list",
   "lists.loadFail": "Failed to load the list",
+  "lists.readAuto": "The “Read” list is filled automatically from reading progress (98%). Add a book from its “Add to list” menu.",
+  "lists.readRemoveConfirm": "Remove this book from “Read”? Its reading progress will be reset.",
   "login.subtitle": "Sign in to open the library",
   "login.login": "Login",
   "login.password": "Password",

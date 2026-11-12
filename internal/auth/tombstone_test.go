@@ -76,10 +76,16 @@ func TestRatingAndListTombstonesSurviveSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bl) != 1 {
-		t.Fatalf("peer lists = %d, want 1", len(bl))
+	var custom *List
+	for i := range bl {
+		if bl[i].Name == "favorites" {
+			custom = &bl[i]
+		}
 	}
-	ids, err := b.ListBookIDs(ctx, ub.ID, bl[0].ID, 10, 0)
+	if custom == nil {
+		t.Fatalf("peer lists = %+v, want favorites", bl)
+	}
+	ids, err := b.ListBookIDs(ctx, ub.ID, custom.ID, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +103,13 @@ func TestRatingAndListTombstonesSurviveSync(t *testing.T) {
 	if err := b.MergeState(ctx, ub.ID, state); err != nil {
 		t.Fatal(err)
 	}
-	if bl, err := b.Lists(ctx, ub.ID); err != nil || len(bl) != 0 {
-		t.Fatalf("deleted list resurrected on peer: %v, %v", bl, err)
+	if bl, err := b.Lists(ctx, ub.ID); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, l := range bl {
+			if l.Name == "favorites" {
+				t.Fatalf("deleted list resurrected on peer: %+v", bl)
+			}
+		}
 	}
 }
