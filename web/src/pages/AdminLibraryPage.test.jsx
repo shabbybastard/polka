@@ -116,6 +116,66 @@ describe("AdminLibraryPage", () => {
     expect(await screen.findByText(t("admin.convert.jobs"))).toBeInTheDocument();
   });
 
+  it("moves import and collections into collapsible blocks under Books", async () => {
+    mockBase();
+
+    render(
+      <MemoryRouter>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: t("admin.tab.import") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("admin.tab.collections") })).not.toBeInTheDocument();
+
+    const importToggle = screen.getByRole("button", { name: t("admin.import") });
+    const collectionsToggle = screen.getByRole("button", { name: t("admin.collections") });
+    expect(importToggle).toHaveAttribute("aria-expanded", "false");
+    expect(collectionsToggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(importToggle);
+    expect(importToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(t("admin.import.hint"))).toBeInTheDocument();
+    expect(collectionsToggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(importToggle);
+    expect(importToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(t("admin.import.hint"))).not.toBeInTheDocument();
+
+    fireEvent.click(collectionsToggle);
+    expect(collectionsToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("heading", { name: t("admin.collections") })).toBeInTheDocument();
+  });
+
+  it("opens the import block from a legacy tab link", async () => {
+    mockBase();
+
+    render(
+      <MemoryRouter initialEntries={["/admin/library?tab=import"]}>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    const importToggle = await screen.findByRole("button", { name: t("admin.import") });
+    expect(importToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(t("admin.import.hint"))).toBeInTheDocument();
+  });
+
+  it("opens the collections block from a legacy tab link", async () => {
+    mockBase();
+
+    render(
+      <MemoryRouter initialEntries={["/admin/library?tab=collections"]}>
+        <AdminLibraryPage />
+      </MemoryRouter>
+    );
+
+    const collectionsToggle = await screen.findByRole("button", { name: t("admin.collections") });
+    expect(collectionsToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("heading", { name: t("admin.collections") })).toBeInTheDocument();
+  });
+
   it("renders the users sub-tab", async () => {
     mockBase();
     fetchUsers.mockResolvedValue({ users: [] });

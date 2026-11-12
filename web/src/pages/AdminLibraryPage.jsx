@@ -82,11 +82,26 @@ const conversionSignature = (jobs) =>
 
 const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const legacyPanel = rawTab === "import" || rawTab === "collections" ? rawTab : "";
   const VALID_TABS = desktop
-    ? ["books", "import", "collections", "sources", "readers", "appearance", "maintenance"]
-    : ["books", "import", "collections", "sources", "users", "readers", "appearance", "maintenance"];
-  const tab = VALID_TABS.includes(searchParams.get("tab")) ? searchParams.get("tab") : "books";
+    ? ["books", "sources", "readers", "appearance", "maintenance"]
+    : ["books", "sources", "users", "readers", "appearance", "maintenance"];
+  const tab = VALID_TABS.includes(rawTab) ? rawTab : "books";
   const selectTab = (id) => setSearchParams(id === "books" ? {} : { tab: id }, { replace: true });
+  // Import and collections used to be separate tabs. They now live inside
+  // "Books" as collapsible blocks; keep old links working by opening the
+  // matching block.
+  const [openPanels, setOpenPanels] = useState(() => ({
+    import: legacyPanel === "import",
+    collections: legacyPanel === "collections",
+  }));
+  useEffect(() => {
+    if (legacyPanel) {
+      setOpenPanels({ import: legacyPanel === "import", collections: legacyPanel === "collections" });
+    }
+  }, [legacyPanel]);
+  const togglePanel = (id) => setOpenPanels((prev) => ({ ...prev, [id]: !prev[id] }));
   // --- Book upload ---
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
@@ -667,8 +682,6 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       <nav className="library-admin__tabs" aria-label={t("admin.tabs")}>
         {[
           { id: "books", label: t("admin.tab.books") },
-          { id: "import", label: t("admin.tab.import") },
-          { id: "collections", label: t("admin.tab.collections") },
           { id: "sources", label: t("admin.tab.sources") },
           ...(desktop ? [] : [{ id: "users", label: t("admin.tab.users") }]),
           { id: "readers", label: t("admin.tab.readers") },
@@ -858,6 +871,31 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
             )}
           </div>
         )}
+
+        <div className="library-admin__spoilers">
+          <button
+            type="button"
+            className={`library-admin__spoiler-toggle ${openPanels.import ? "is-open" : ""}`}
+            aria-expanded={openPanels.import}
+            onClick={() => togglePanel("import")}
+          >
+            <span>{t("admin.import")}</span>
+            <span className="library-admin__spoiler-mark" aria-hidden="true">
+              {openPanels.import ? "−" : "+"}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`library-admin__spoiler-toggle ${openPanels.collections ? "is-open" : ""}`}
+            aria-expanded={openPanels.collections}
+            onClick={() => togglePanel("collections")}
+          >
+            <span>{t("admin.collections")}</span>
+            <span className="library-admin__spoiler-mark" aria-hidden="true">
+              {openPanels.collections ? "−" : "+"}
+            </span>
+          </button>
+        </div>
       </section>
       )}
 
@@ -872,8 +910,8 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       </section>
       )}
 
-      {tab === "collections" && (
-      <section className="library-admin__section">
+      {tab === "books" && openPanels.collections && (
+      <section className="library-admin__section library-admin__spoiler-panel">
         <h2>{t("admin.collections")}</h2>
         <p className="library-admin__hint">
           {t("admin.collections.hint")}{" "}
@@ -965,8 +1003,8 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
       </section>
       )}
 
-      {tab === "import" && (
-      <section className="library-admin__section">
+      {tab === "books" && openPanels.import && (
+      <section className="library-admin__section library-admin__spoiler-panel">
         <h2>{t("admin.import")}</h2>
         <p className="library-admin__hint">
           {t("admin.import.hint")}
