@@ -10,6 +10,7 @@ import LoginPage from "./pages/LoginPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminLibraryPage from "./pages/AdminLibraryPage";
 import ReaderPage from "./pages/ReaderPage";
+import ReaderDevicesPage from "./pages/ReaderDevicesPage";
 import ListsPage from "./pages/ListsPage";
 import SyncPage from "./pages/SyncPage";
 import { fetchConfig } from "./api/fetchBooks";
@@ -114,6 +115,7 @@ const Root = () => {
         <Route path="/" element={layout(<HomePage config={config} />)} />
         <Route path="/search" element={layout(<SearchPage config={config} />)} />
         <Route path="/lists" element={user ? layout(<ListsPage />) : <Navigate to="/" replace />} />
+        <Route path="/reader" element={user ? layout(<ReaderDevicesPage />) : <Navigate to="/" replace />} />
         <Route path="/book/:bookId" element={layout(<BookPage user={user} sync={sync} />)} />
         {(sync || isDesktop) && <Route path="/sync" element={layout(<SyncPage />)} />}
         {/* Читалка — без общей шапки, у неё свой минимальный интерфейс */}

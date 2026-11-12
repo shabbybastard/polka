@@ -36,6 +36,14 @@ type KosyncProgress struct {
 	Timestamp  int64 // unix seconds, server-side
 }
 
+// KosyncDevice summarizes one device that has pushed positions.
+type KosyncDevice struct {
+	Device    string `json:"device"`
+	DeviceID  string `json:"deviceId"`
+	LastSync  int64  `json:"lastSync"`
+	Documents int    `json:"documents"`
+}
+
 func kosyncKeySetting(userID int64) string { return fmt.Sprintf("kosync_key:%d", userID) }
 
 // KosyncKey returns the user's device key (an MD5 hex of the password
@@ -93,6 +101,36 @@ func (s *Service) KosyncGet(ctx context.Context, userID int64, document string) 
 		return nil, ErrNotFound
 	}
 	return p, err
+}
+
+// KosyncDevices returns the devices that have pushed positions, newest first.
+func (s *Service) KosyncDevices(ctx context.Context, userID int64) ([]KosyncDevice, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT device, device_id, max(timestamp), count(*)
+		FROM kosync_progress WHERE user_id = ?
+		GROUP BY device, device_id
+		ORDER BY max(timestamp) DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KosyncDevice
+	for rows.Next() {
+		var d KosyncDevice
+		if err := rows.Scan(&d.Device, &d.DeviceID, &d.LastSync, &d.Documents); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// KosyncLastSync returns the newest device timestamp, or 0 if none.
+func (s *Service) KosyncLastSync(ctx context.Context, userID int64) (int64, error) {
+	var ts int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT coalesce(max(timestamp), 0) FROM kosync_progress WHERE user_id = ?`, userID).Scan(&ts)
+	return ts, err
 }
 
 // SaveOverall updates only the overall fraction of the reading progress

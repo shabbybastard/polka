@@ -225,15 +225,15 @@
   }
 
   /* Specificity over the base rules, which appear later in the file. */
-  .topbar__user .topbar__kosync-text {
+  .topbar__user .topbar__admin-text {
     display: none;
   }
 
-  .topbar__user .topbar__kosync-icon {
+  .topbar__user .topbar__admin-icon {
     display: inline;
   }
 
-  .topbar__user .topbar__kosync {
+  .topbar__user .topbar__admin {
     padding: 8px 10px;
   }
 }
@@ -246,11 +246,15 @@
   min-width: 0;
 }
 
-.topbar__kosync {
+.topbar__admin {
   font-size: 13px;
 }
 
-.topbar__kosync-icon {
+.topbar__admin.is-active {
+  color: var(--fg);
+}
+
+.topbar__admin-icon {
   display: none;
   font-size: 16px;
   line-height: 1;

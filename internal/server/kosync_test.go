@@ -106,6 +106,29 @@ func TestKosyncProtocol(t *testing.T) {
 	if _, body = kosyncDo(t, base, "GET", "/syncs/progress/"+strings.Repeat("b", 32), "reader", devKey, ""); body["progress"] != "42" {
 		t.Errorf("numeric progress echo: %v", body)
 	}
+	// The web UI sees the devices and the newest sync time.
+	devicesResp := getJSONWith(t, f.reader, base+"/api/v1/me/kosync")
+	if devicesResp["enabled"] != true || devicesResp["login"] != "reader" {
+		t.Errorf("kosync settings = %v", devicesResp)
+	}
+	if ts, _ := devicesResp["lastSync"].(float64); ts <= 0 {
+		t.Errorf("lastSync = %v", devicesResp["lastSync"])
+	}
+	devices, _ := devicesResp["devices"].([]any)
+	if len(devices) != 2 {
+		t.Fatalf("devices = %v, want 2", devicesResp["devices"])
+	}
+	found := false
+	for _, raw := range devices {
+		d, _ := raw.(map[string]any)
+		if d["device"] == "PocketBook" && d["deviceId"] == "DEV1" && d["documents"] == float64(1) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("PocketBook device missing: %v", devices)
+	}
+
 	// Unknown document: 200 with an empty object.
 	if code, body = kosyncDo(t, base, "GET", "/syncs/progress/"+strings.Repeat("c", 32), "reader", devKey, ""); code != 200 || len(body) != 0 {
 		t.Errorf("unknown doc: %d %v", code, body)

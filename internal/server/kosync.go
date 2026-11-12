@@ -234,9 +234,21 @@ func (s *Server) handleKosyncSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	devices, err := s.users.KosyncDevices(r.Context(), u.ID)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	lastSync, err := s.users.KosyncLastSync(r.Context(), u.ID)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
 	writeJSON(w, map[string]any{
-		"enabled": s.users.KosyncKey(r.Context(), u.ID) != "",
-		"login":   u.Login,
+		"enabled":  s.users.KosyncKey(r.Context(), u.ID) != "",
+		"login":    u.Login,
+		"devices":  devices,
+		"lastSync": lastSync,
 	})
 }
 

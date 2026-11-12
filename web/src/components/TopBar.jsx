@@ -1,15 +1,12 @@
 import { t, currentLang, setLang } from "../i18n";
 import { cycleTheme, getTheme } from "../theme";
-import KosyncDialog from "./KosyncDialog";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import "./TopBar.css";
 
 const THEME_ICONS = { auto: "◐", light: "☀", dark: "☾" };
 
 const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
-  const [kosyncOpen, setKosyncOpen] = useState(false);
   const [theme, setTheme] = useState(getTheme);
   // Narrow screens collapse the search into an icon; tapping it expands
   // the field over the top bar.
@@ -79,12 +76,9 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
               {sync && !sync.online && <span className="topbar__offline-dot" title={t("nav.serverDown")} />}
             </Link>
           )}
-          {user?.role === "admin" && (
-            <Link
-              to="/admin/library"
-              className={`topbar__nav-link ${isActive("/admin/library") ? "is-active" : ""}`}
-            >
-              {t("nav.manage")}
+          {user && !desktop && !sync && (
+            <Link to="/reader" className={`topbar__nav-link ${isActive("/reader") ? "is-active" : ""}`}>
+              {t("nav.reader")}
             </Link>
           )}
         </nav>
@@ -150,16 +144,15 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
 
         {user && (
           <div className="topbar__user">
-            {!desktop && !sync && (
-              <button
-                type="button"
-                className="btn btn-link topbar__kosync"
-                title={t("kosync.title")}
-                onClick={() => setKosyncOpen(true)}
+            {user.role === "admin" && (
+              <Link
+                to="/admin/library"
+                className={`btn btn-link topbar__admin ${isActive("/admin/library") ? "is-active" : ""}`}
+                title={t("nav.manage")}
               >
-                <span className="topbar__kosync-icon" aria-hidden="true">⇄</span>
-                <span className="topbar__kosync-text">{t("kosync.menu")}</span>
-              </button>
+                <span className="topbar__admin-icon" aria-hidden="true">⚙</span>
+                <span className="topbar__admin-text">{t("nav.manage")}</span>
+              </Link>
             )}
             <span className="topbar__user-name" title={user.login}>
               {desktop ? t("owner") : user.displayName || user.login}
@@ -172,10 +165,6 @@ const TopBar = ({ user, onLogout, desktop = false, sync = null }) => {
           </div>
         )}
       </div>
-      {/* The sticky header uses backdrop-filter, which makes fixed-position
-          descendants relative to the header. Portal the dialog to <body>
-          so its overlay and centering use the viewport. */}
-      {kosyncOpen && createPortal(<KosyncDialog onClose={() => setKosyncOpen(false)} />, document.body)}
     </header>
   );
 };
