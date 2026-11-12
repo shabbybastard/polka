@@ -315,7 +315,7 @@ func (b *telegramBackend) UploadLimit(ctx context.Context) int {
 func (b *telegramBackend) Upload(ctx context.Context, userID int64, filename string, r io.Reader, size int64, lang string) (*tgbot.UploadResult, error) {
 	res := b.s.ingestReader(ctx, filename, r, false, lang)
 	out := &tgbot.UploadResult{
-		BookID: res.BookID, Title: res.Title, Authors: res.Authors, Error: res.Error,
+		BookID: res.BookID, JobID: res.JobID, Title: res.Title, Authors: res.Authors, Error: res.Error,
 	}
 	switch {
 	case res.Status == "queued":
@@ -336,4 +336,25 @@ func (b *telegramBackend) Upload(ctx context.Context, userID int64, filename str
 		out.Status = tgbot.UploadError
 	}
 	return out, nil
+}
+
+func (b *telegramBackend) Conversion(ctx context.Context, jobID string) (*tgbot.ConversionJob, error) {
+	if b.s.conv == nil {
+		return nil, errors.New("conversion queue is not configured")
+	}
+	job, err := b.s.conv.Get(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	errText := cleanStatusError(job.Error)
+	if strings.Contains(errText, "<path>") {
+		errText = ""
+	}
+	return &tgbot.ConversionJob{
+		ID:     job.ID,
+		Name:   job.Name,
+		Status: job.Status,
+		Error:  errText,
+		BookID: job.BookID,
+	}, nil
 }

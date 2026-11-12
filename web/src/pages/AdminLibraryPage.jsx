@@ -908,17 +908,6 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
         <div className="library-admin__spoilers">
           <button
             type="button"
-            className={`library-admin__spoiler-toggle ${openPanels.import ? "is-open" : ""}`}
-            aria-expanded={openPanels.import}
-            onClick={() => togglePanel("import")}
-          >
-            <span>{t("admin.import")}</span>
-            <span className="library-admin__spoiler-mark" aria-hidden="true">
-              {openPanels.import ? "−" : "+"}
-            </span>
-          </button>
-          <button
-            type="button"
             className={`library-admin__spoiler-toggle ${openPanels.collections ? "is-open" : ""}`}
             aria-expanded={openPanels.collections}
             onClick={() => togglePanel("collections")}
@@ -926,6 +915,17 @@ const AdminLibraryPage = ({ onConfigChange, me, desktop = false }) => {
             <span>{t("admin.collections")}</span>
             <span className="library-admin__spoiler-mark" aria-hidden="true">
               {openPanels.collections ? "−" : "+"}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`library-admin__spoiler-toggle ${openPanels.import ? "is-open" : ""}`}
+            aria-expanded={openPanels.import}
+            onClick={() => togglePanel("import")}
+          >
+            <span>{t("admin.import")}</span>
+            <span className="library-admin__spoiler-mark" aria-hidden="true">
+              {openPanels.import ? "−" : "+"}
             </span>
           </button>
         </div>

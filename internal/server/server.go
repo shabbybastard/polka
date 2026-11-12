@@ -431,10 +431,16 @@ func (s *Server) originCheck(next http.Handler) http.Handler {
 func spaHandler(webFS fs.FS) http.Handler {
 	fileServer := http.FileServerFS(webFS)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Media endpoints are handled by explicit mux routes; an unknown one is
-		// a missing file, not a client-side route. Returning index.html here
-		// used to make removed downloads look like HTML books.
-		if strings.HasPrefix(r.URL.Path, "/Images/") {
+		// API and media endpoints are handled by explicit mux routes; an
+		// unknown one is a missing endpoint/file, not a client-side route.
+		// Returning index.html here used to make removed downloads look like
+		// HTML books and missing API calls look like successful responses.
+		p := r.URL.Path
+		if strings.HasPrefix(p, "/Images/") ||
+			p == "/api" || strings.HasPrefix(p, "/api/") ||
+			p == "/users" || strings.HasPrefix(p, "/users/") ||
+			p == "/syncs" || strings.HasPrefix(p, "/syncs/") ||
+			p == "/healthcheck" {
 			http.NotFound(w, r)
 			return
 		}

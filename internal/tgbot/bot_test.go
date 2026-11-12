@@ -120,6 +120,17 @@ func (f *fakeAPI) lastText() string {
 	return f.sent[len(f.sent)-1].text
 }
 
+func (f *fakeAPI) hasText(want string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.sent {
+		if strings.Contains(m.text, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *fakeAPI) lastOpts() SendOptions {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -144,6 +155,7 @@ type fakeBackend struct {
 	uploadLimit int
 	uploadCalls int
 	uploadRes   *UploadResult
+	conversions map[string]*ConversionJob
 	cover       []byte
 	coverMime   string
 }
@@ -153,6 +165,7 @@ func newFakeBackend() *fakeBackend {
 		users:       map[int64]*User{},
 		langs:       map[int64]string{},
 		books:       map[int64]*Book{},
+		conversions: map[string]*ConversionJob{},
 		uploadLimit: 50,
 		stats:       &Stats{Books: 10, Users: 2, Version: "test", Uptime: time.Hour, DiskOK: true, DiskFree: 5 << 30, DiskUsed: 3 << 30},
 		status:      &Status{},
@@ -262,6 +275,17 @@ func (f *fakeBackend) Upload(_ context.Context, _ int64, _ string, r io.Reader, 
 		return &UploadResult{Status: UploadAdded, BookID: 1, Title: "Книга"}, nil
 	}
 	copy := *res
+	return &copy, nil
+}
+
+func (f *fakeBackend) Conversion(_ context.Context, jobID string) (*ConversionJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	job := f.conversions[jobID]
+	if job == nil {
+		return nil, errors.New("not found")
+	}
+	copy := *job
 	return &copy, nil
 }
 
@@ -550,6 +574,74 @@ func TestUploadRateLimit(t *testing.T) {
 	}
 	if !strings.Contains(api.lastText(), "limit reached") {
 		t.Fatalf("limit text = %q", api.lastText())
+	}
+}
+
+func waitForText(t *testing.T, api *fakeAPI, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if strings.Contains(api.lastText(), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("message %q not received, last = %q", want, api.lastText())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestUploadQueuedReportsConversionResult(t *testing.T) {
+	cases := []struct {
+		name string
+		job  *ConversionJob
+		book *Book
+		want string
+	}{
+		{
+			name: "done",
+			job:  &ConversionJob{ID: "job-1", Name: "book.fb2", Status: "done", BookID: 3},
+			book: &Book{ID: 3, Title: "Готовая книга"},
+			want: "Book added to the library: Готовая книга",
+		},
+		{
+			name: "skipped",
+			job:  &ConversionJob{ID: "job-1", Name: "book.fb2", Status: "skipped", BookID: 3},
+			book: &Book{ID: 3, Title: "Уже есть"},
+			want: "Book is already in the library: Уже есть",
+		},
+		{
+			name: "failed",
+			job:  &ConversionJob{ID: "job-1", Name: "book.fb2", Status: "failed", Error: "broken fb2"},
+			want: "Could not add book book.fb2: broken fb2",
+		},
+		{
+			name: "failed_path",
+			job:  &ConversionJob{ID: "job-1", Name: "book.fb2", Status: "failed", Error: "open /tmp/my book.fb2: no such file"},
+			want: "Could not add book book.fb2. Check the server logs.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, api, backend, user := testBot(t)
+			user.Role = "admin"
+			backend.users[555] = user
+			backend.uploadRes = &UploadResult{Status: UploadQueued, JobID: "job-1", Title: "book.fb2"}
+			backend.conversions["job-1"] = tc.job
+			if tc.book != nil {
+				backend.books[tc.book.ID] = tc.book
+			}
+			api.fileData = []byte(`<?xml version="1.0"?><FictionBook></FictionBook>`)
+			doc := &Message{
+				MessageID: 1, From: &TGUser{ID: 555, LanguageCode: "en"}, Chat: Chat{ID: 100},
+				Document: &Document{FileID: "f", FileName: "book.fb2", FileSize: int64(len(api.fileData))},
+			}
+			bot.handleUpdate(context.Background(), Update{Message: doc})
+			if !api.hasText("Queued for conversion") {
+				t.Fatalf("queued message missing: %q", api.lastText())
+			}
+			waitForText(t, api, tc.want)
+		})
 	}
 }
 

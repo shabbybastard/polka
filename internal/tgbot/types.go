@@ -110,12 +110,22 @@ const (
 type UploadResult struct {
 	Status         string
 	BookID         int64
+	JobID          string
 	Title          string
 	Authors        string
 	Error          string
 	DuplicateID    int64
 	DuplicateTitle string
 	DuplicateWhy   string
+}
+
+// ConversionJob is the bot's view of one background FB2 -> EPUB job.
+type ConversionJob struct {
+	ID     string
+	Name   string
+	Status string
+	Error  string
+	BookID int64
 }
 
 // Backend is implemented by the server package. All methods map to
@@ -140,4 +150,5 @@ type Backend interface {
 	Status(ctx context.Context) (*Status, error)
 	UploadLimit(ctx context.Context) int
 	Upload(ctx context.Context, userID int64, filename string, r io.Reader, size int64, lang string) (*UploadResult, error)
+	Conversion(ctx context.Context, jobID string) (*ConversionJob, error)
 }

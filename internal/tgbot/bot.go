@@ -22,6 +22,9 @@ const (
 	maxPhotoBytes   = 10 << 20
 	maxTextRunes    = 4000
 	callbackTimeout = 20 * time.Second
+
+	conversionPollInterval = 10 * time.Second
+	conversionWatchTimeout = 5 * time.Minute
 )
 
 var supportedExt = map[string]bool{
@@ -1180,6 +1183,81 @@ func (b *Bot) handleDocument(ctx context.Context, msg *Message, user *User, lang
 		return
 	}
 	b.sendUploadResult(ctx, msg.Chat.ID, lang, res)
+	if res.Status == UploadQueued && res.JobID != "" {
+		title := res.Title
+		if title == "" {
+			title = filename
+		}
+		go b.watchConversion(user.ID, msg.Chat.ID, lang, res.JobID, title)
+	}
+}
+
+// watchConversion polls a background FB2 -> EPUB job and reports the final
+// result in the same chat. The upload response already says "queued"; this
+// closes the loop once the book is actually in the library.
+func (b *Bot) watchConversion(userID, chatID int64, lang, jobID, fallbackTitle string) {
+	ctx, cancel := context.WithTimeout(context.Background(), conversionWatchTimeout)
+	defer cancel()
+
+	check := func() bool {
+		job, err := b.backend.Conversion(ctx, jobID)
+		if err != nil || job == nil {
+			return false
+		}
+		switch job.Status {
+		case "done":
+			title := b.conversionTitle(ctx, userID, lang, job, fallbackTitle)
+			b.sendText(context.Background(), chatID, b.tr(lang, "uploadConverted", title), SendOptions{})
+			return true
+		case "skipped":
+			title := b.conversionTitle(ctx, userID, lang, job, fallbackTitle)
+			b.sendText(context.Background(), chatID, b.tr(lang, "uploadAlreadyInLibrary", title), SendOptions{})
+			return true
+		case "failed":
+			title := job.Name
+			if title == "" {
+				title = fallbackTitle
+			}
+			reason := job.Error
+			// Never leak filesystem paths or path fragments to the chat.
+			if strings.Contains(reason, "<path>") || strings.ContainsAny(reason, `/\`) {
+				reason = ""
+			}
+			text := b.tr(lang, "uploadConversionFailedGeneric", title)
+			if reason != "" {
+				text = b.tr(lang, "uploadConversionFailed", title, reason)
+			}
+			b.sendText(context.Background(), chatID, text, SendOptions{})
+			return true
+		}
+		return false
+	}
+
+	if check() {
+		return
+	}
+	ticker := time.NewTicker(conversionPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			b.sendText(context.Background(), chatID, b.tr(lang, "uploadStillConverting", fallbackTitle), SendOptions{})
+			return
+		case <-ticker.C:
+			if check() {
+				return
+			}
+		}
+	}
+}
+
+func (b *Bot) conversionTitle(ctx context.Context, userID int64, lang string, job *ConversionJob, fallback string) string {
+	if job.BookID > 0 {
+		if book, err := b.backend.Book(ctx, userID, job.BookID, lang); err == nil && book != nil && book.Title != "" {
+			return book.Title
+		}
+	}
+	return fallback
 }
 
 func (b *Bot) sendUploadResult(ctx context.Context, chatID int64, lang string, res *UploadResult) {

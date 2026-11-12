@@ -223,6 +223,23 @@ func TestAPIEndToEnd(t *testing.T) {
 		t.Errorf("removed zip download -> %d, want 404", resp.StatusCode)
 	}
 
+	// Removed API endpoints must be real 404s, not the SPA index with 200.
+	for _, path := range []string{
+		"/api/v1/stats",
+		"/api/v1/books/" + itoa64(bookID) + "/annotations",
+		"/users/nope",
+		"/syncs/nope",
+	} {
+		resp, err = http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 404 {
+			t.Errorf("%s -> %d, want 404", path, resp.StatusCode)
+		}
+	}
+
 	// Nonexistent book
 	resp, _ = http.Get(ts.URL + "/main/getBooks/getBookForm?selectedItemID=99999")
 	resp.Body.Close()

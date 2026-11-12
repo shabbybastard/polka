@@ -65,7 +65,7 @@ mobile reading app.
   (kosync): KOReader on PocketBook, Kindle, Kobo, reMarkable and friends
   pushes the reading position straight to your server, and books read on
   the device show their progress on Polka's "Reading now" shelf. Each user
-  sets a device password in the top-bar "E-reader" dialog.
+  sets a device password on the **E-reader** tab.
 - **Send to your e-reader.** Configure SMTP once and e-mail any book straight
   to your Kindle / Kobo / PocketBook from its page (the SMTP password is stored
   encrypted).
@@ -210,7 +210,7 @@ Install [KOReader](https://koreader.rocks) on the device, then:
    (your Polka login and password) — browse, search and download right
    on the device. PocketBook owners can also use Polka's *Send to
    e-reader* button with their `@pbsync.com` address.
-2. **Progress sync**: in Polka's top bar open *E-reader*, set a device
+2. **Progress sync**: open the **E-reader** tab in Polka, set a device
    password; on the device: *Tools → Progress sync*, server address =
    your Polka URL, username = your Polka login, password = the device
    password. Positions of books downloaded through Polka then follow you

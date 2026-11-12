@@ -184,4 +184,18 @@ func TestTelegramBackendUsesExistingServices(t *testing.T) {
 	if backend.UploadLimit(ctx) != 50 {
 		t.Errorf("upload limit = %d", backend.UploadLimit(ctx))
 	}
+
+	// A queued FB2 conversion exposes its job id and status to the bot.
+	if err := f.users.SetSetting(ctx, "convert.fb2_to_epub", "1"); err != nil {
+		t.Fatal(err)
+	}
+	fb2 = strings.Replace(testFB2, "Война и мир", "Книга на конвертацию", 1)
+	queued, err := backend.Upload(ctx, reader.ID, "convert.fb2", strings.NewReader(fb2), int64(len(fb2)), "ru")
+	if err != nil || queued == nil || queued.Status != tgbot.UploadQueued || queued.JobID == "" {
+		t.Fatalf("queued upload: %+v %v", queued, err)
+	}
+	job, err := backend.Conversion(ctx, queued.JobID)
+	if err != nil || job == nil || job.ID != queued.JobID || job.Status == "" {
+		t.Fatalf("conversion job: %+v %v", job, err)
+	}
 }

@@ -145,7 +145,17 @@ describe("AdminLibraryPage", () => {
 
     fireEvent.click(collectionsToggle);
     expect(collectionsToggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("heading", { name: t("admin.collections") })).toBeInTheDocument();
+    fireEvent.click(importToggle);
+    expect(importToggle).toHaveAttribute("aria-expanded", "true");
+    const collectionsHeading = screen.getByRole("heading", { name: t("admin.collections") });
+    const importHeading = screen.getByRole("heading", { name: t("admin.import") });
+    expect(collectionsHeading).toBeInTheDocument();
+    expect(
+      collectionsHeading.compareDocumentPosition(importHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      collectionsToggle.compareDocumentPosition(importToggle) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it("opens the import block from a legacy tab link", async () => {
