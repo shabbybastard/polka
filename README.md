@@ -109,18 +109,27 @@ Open `http://localhost:12791`, sign in with the bootstrap admin account
 exploring.
 
 With [docker-compose.yml](docker-compose.yml), the prebuilt GHCR image is used
-and nothing is built locally:
+and nothing is built locally. Set the host paths for the application data and
+the book collection, for example in a `.env` file next to the compose file:
+
+```sh
+DATA_DIR=%your data folder%
+BOOKS_DIR=%your book folder%
+POLKA_TAG=v0.1.22-fork.10
+```
+
+Replace `%your data folder%` and `%your book folder%` with real host paths.
+`POLKA_TAG` is optional; without it the `latest` image is used.
+
+Then deploy the image:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-Pin a specific release with `POLKA_TAG`:
-
-```sh
-POLKA_TAG=v0.1.22-fork.10 docker compose up -d
-```
+`pull_policy: always` makes `docker compose up -d` check for a newer image even
+without an explicit `pull`.
 
 For local development or a modified fork, use the explicit build override:
 
