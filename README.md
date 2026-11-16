@@ -106,11 +106,31 @@ docker run -d --name polka \
 
 Open `http://localhost:12791`, sign in with the bootstrap admin account
 (created on first run — see the container log: `docker logs polka`), and start
-exploring. Or use [docker-compose.yml](docker-compose.yml):
+exploring.
+
+With [docker-compose.yml](docker-compose.yml), the prebuilt GHCR image is used
+and nothing is built locally:
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+Pin a specific release with `POLKA_TAG`:
+
+```sh
+POLKA_TAG=v0.1.22-fork.10 docker compose up -d
+```
+
+For local development or a modified fork, use the explicit build override:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+[docker-compose.build.yml](docker-compose.build.yml) builds and tags the image
+as `polka:local`; that tag stays local and is not published to a registry.
+The base `docker-compose.yml` never builds an image.
 
 ### Desktop app — no server required
 

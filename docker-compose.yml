@@ -1,7 +1,6 @@
 services:
   polka:
-    build: .
-    image: polka:local
+    image: ghcr.io/shabbybastard/polka:${POLKA_TAG:-latest}
     ports:
       - "12791:12791"
     volumes:
